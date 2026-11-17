@@ -1,0 +1,13 @@
+# Keep the Windows launcher usable when checked out on Windows or Unix
+*.bat text eol=crlf
+*.js text eol=lf
+*.cjs text eol=lf
+*.json text eol=lf
+*.css text eol=lf
+*.html text eol=lf
+*.md text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.png binary
+*.jpg binary
+*.zip binary

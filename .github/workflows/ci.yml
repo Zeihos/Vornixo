@@ -1,0 +1,37 @@
+name: VORNIXO CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify-and-package:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+      - name: Use Node.js LTS
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Syntax checks
+        run: |
+          node --check server.js
+          node --check public/game.js
+      - name: Test server and browser assets
+        run: npm test
+      - name: Build clean game ZIP
+        run: npm run build:clean
+      - name: Verify ZIP structure
+        run: unzip -t dist/*.zip
+      - name: Upload clean package
+        uses: actions/upload-artifact@v4
+        with:
+          name: VORNIXO-Alpha-clean
+          path: dist/*.zip
+          if-no-files-found: error
+          retention-days: 14

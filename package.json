@@ -1,0 +1,16 @@
+{
+  "name": "vornixo",
+  "version": "0.14.0",
+  "private": true,
+  "description": "Multiplayer browser-based survival and base defense",
+  "main": "server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test",
+    "build:clean": "node scripts/build-clean.cjs"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

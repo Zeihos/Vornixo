@@ -1,5 +1,18 @@
-# Runtime saves are private and generated automatically.
-Игра/data/*
-!Игра/data/.gitkeep
+# Runtime state — never commit player data, accounts or saves
+/data/*
+!/data/.gitkeep
+
+# Dependencies and generated build output
+/node_modules/
+/dist/
+/coverage/
+
+# Local configuration, secrets and logs
+.env
+.env.*
+!.env.example
+*.log
 *.tmp
-node_modules/
+*.bak
+.DS_Store
+Thumbs.db
