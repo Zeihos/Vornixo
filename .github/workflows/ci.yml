@@ -28,6 +28,8 @@ jobs:
         run: npm run build:clean
       - name: Verify ZIP structure
         run: unzip -t dist/*.zip
+      - name: Verify clean ZIP contains only runtime files
+        run: npm run verify:clean
       - name: Upload clean package
         uses: actions/upload-artifact@v4
         with:
