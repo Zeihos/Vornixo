@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#0d1e1b">
+  <title>VORNIXO — Строй. Защищай. Выживай.</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <canvas id="game" aria-label="Игровое поле VORNIXO"></canvas>
+  <div id="vignette"></div>
+  <div id="ui" class="ui hidden">
+    <header class="topbar">
+      <div class="identity"><div class="brand-emblem">V</div><span>VORNIXO <small>ALPHA <b>0.12.0</b></small></span></div>
+      <div class="resource-strip" id="resources">
+        <div class="resource"><span>🪵</span><div><small>ДРЕВЕСИНА</small><strong id="wood">0</strong></div></div>
+        <div class="resource"><span>🪨</span><div><small>КАМЕНЬ</small><strong id="stone">0</strong></div></div>
+        <div class="resource"><span>✦</span><div><small>ЗОЛОТО</small><strong id="gold">0</strong></div></div>
+      </div>
+      <div class="quick-menu"><button id="craftToggle" title="Создание предметов (I)">🎒 КРАФТ <kbd>I</kbd></button><button id="teamToggle" title="Отряд (T)">🤝 ОТРЯД <kbd>T</kbd></button><button id="researchToggle" title="Технологии (K)">🔬 ТЕХНОЛОГИИ <kbd>K</kbd></button><button id="buildToggle" title="Строительство (B)">🏗 ПОСТРОЙКИ <kbd>B</kbd></button><button id="achievementsToggle" title="Достижения (O)">🏆 НАГРАДЫ <kbd>O</kbd></button><button id="baseStatsToggle" title="Статистика базы (J)">📊 БАЗА <kbd>J</kbd></button><button id="weaponToggle" title="Сменить оружие (V)">🏹 АРБАЛЕТ · V</button><button id="settingsToggle" title="Настройки (P)">⚙ НАСТРОЙКИ <kbd>P</kbd></button></div>
+      <div class="server-pill"><i></i><span id="serverState">ПОДКЛЮЧЕНИЕ</span> <span id="online">· 0 / 16</span><span id="netPing" title="Задержка соединения">· — мс</span></div>
+    </header>
+    <div class="wave-panel"><div class="wave-overline" id="waveTitle">ПОДГОТОВКА</div><div class="wave-value" id="waveClock">—</div><div class="wave-detail" id="waveDesc">Установите маяк, чтобы начать</div><div class="progress-track"><div id="timeBar"></div></div></div>
+    <aside class="left-panels">
+      <div class="glass health-card"><div class="panel-label">СОСТОЯНИЕ ВЫЖИВШЕГО</div><div class="hp-row"><span>♥ ЗДОРОВЬЕ</span><strong id="hpText">100 / 100</strong></div><div class="hp-track"><div id="hpBar"></div></div><div class="player-info" id="playerInfo">Выживший • 0 убийств</div><div class="biome-info" id="biomeInfo">🌲 ЛЕСНАЯ ЗОНА</div></div>
+      <div class="glass mission-card"><div class="panel-label">ТЕКУЩАЯ ЗАДАЧА <span class="accent-dot">●</span></div><div class="mission-title" id="missionTitle">Постройте Маяк</div><div class="mission-desc" id="missionDesc">Нажмите 2 и разместите маяк рядом с персонажем.</div><div class="mission-tip">Нажмите <kbd>H</kbd>, чтобы открыть помощь</div></div>
+      <div class="glass skill-card"><div class="panel-label">РАЗВИТИЕ ПЕРСОНАЖА</div><div class="skill-list" id="skillOptions">
+        <button class="skill-btn" data-skill="power"><span class="skill-name">Z · Урон · 0/3</span><span class="skill-cost">30 ✦</span></button>
+        <button class="skill-btn" data-skill="vitality"><span class="skill-name">X · HP · 0/3</span><span class="skill-cost">35 ✦</span></button>
+        <button class="skill-btn" data-skill="speed"><span class="skill-name">C · Бег · 0/3</span><span class="skill-cost">40 ✦</span></button>
+      </div></div>
+      <div class="glass pulse-card"><div class="panel-label">СПОСОБНОСТЬ И СОХРАНЕНИЕ</div><button id="pulseButton" class="pulse-button">⚡ Q · ЗАЩИТНЫЙ ИМПУЛЬС <span id="pulseTimer">10 ✦</span></button><button id="dashButton" class="pulse-button dash-button" title="Рывок в направлении движения (Shift)">➤ SHIFT · РЫВОК <span id="dashTimer">ГОТОВ</span></button><div id="saveState" class="save-state">● Мир сохраняется автоматически</div></div>
+    </aside>
+    <aside class="right-panels">
+      <div class="glass rating-card"><div class="rating-head"><span>🏆 РЕЙТИНГ ЭКСПЕДИЦИИ</span><small>ОЧКИ</small></div><div id="leaderboard"></div><div class="records-title">⭐ РЕКОРДЫ СЕРВЕРА</div><div id="recordsList"></div></div>
+      <div class="glass base-status-card"><div class="rating-head"><span>◈ ОБОРОНА СЕКТОРОВ</span><small>ВОЛНЫ</small></div><div id="baseList"></div></div><div class="glass minimap-wrap"><canvas id="minimap" width="210" height="150"></canvas><div class="map-label">КАРТА ТЕРРИТОРИИ <kbd>M</kbd></div></div>
+    </aside>
+    <section class="chat-box" aria-label="Чат игроков"><div id="chatMessages" class="chat-messages"></div><div class="chat-prompt">Нажмите <kbd>Enter</kbd>, чтобы написать</div><div id="chatComposer" class="chat-composer hidden"><label class="team-chat-option" title="Писать только отряду"><input type="checkbox" id="chatTeam">Отряд</label><input id="chatInput" maxlength="110" placeholder="Сообщение команде..." autocomplete="off"><button id="chatSend">➤</button></div></section>
+    <div id="toastArea" class="toasts"></div>
+    <div id="craftPanel" class="game-modal hidden" role="dialog" aria-label="Крафт предметов">
+      <div class="panel-head"><strong>🎒 МАСТЕРСКАЯ</strong><button id="craftClose" aria-label="Закрыть">✕</button></div>
+      <p>Создавайте предметы из собранных материалов. Запас сохраняется вместе с профилем.</p>
+      <div class="craft-grid">
+        <div class="craft-item"><strong>🩹 Аптечка <span id="qtyMedkit">0</span></strong><small>15 🪵 + 10 🪨 + 5 ✦ · Восстанавливает 65 HP</small><div><button data-craft="medkit">Создать</button><button data-use="medkit">Использовать</button></div></div>
+        <div class="craft-item"><strong>🔧 Ремкомплект <span id="qtyRepairkit">0</span></strong><small>25 🪵 + 15 🪨 · Восстанавливает 175 HP постройки</small><div><button data-craft="repairkit">Создать</button><button data-use="repairkit">Применить к постройке под курсором</button></div></div>
+        <div class="craft-item"><strong>🏹 Болты <span id="qtyBolts">0</span></strong><small>8 🪵 + 6 🪨 · 14 болтов для арбалета</small><div><button data-craft="bolts">Создать 14 болтов</button></div></div>
+        <div class="craft-item"><strong>🧪 Сигнальная граната <span id="qtyFlare">0</span></strong><small>12 🪵 + 8 🪨 + 8 ✦ · Замедляет зомби на 5 сек. в области под курсором</small><div><button data-craft="flare">Создать</button><button data-use="flare">Бросить под курсор</button></div></div>
+        <div class="craft-item"><strong>🔫 Патроны дробовика <span id="qtyShells">0</span></strong><small>10 🪵 + 14 🪨 + 7 ✦ · 6 патронов, выстрел по группе врагов до 330 единиц</small><div><button data-craft="shells">Создать 6 патронов</button></div></div>
+      </div>
+    </div>
+    <div id="teamPanel" class="game-modal hidden" role="dialog" aria-label="Управление отрядом">
+      <div class="panel-head"><strong>🤝 ОТРЯД ВЫЖИВШИХ</strong><button id="teamClose" aria-label="Закрыть">✕</button></div>
+      <div id="teamNoGroup"><p>Создайте отряд до 4 человек или присоединитесь по коду. Отряды сохраняются и могут строить собственные командные базы.</p>
+        <div class="team-form"><input id="teamName" maxlength="18" placeholder="Название отряда"><button id="teamCreate">Создать отряд</button></div>
+        <div class="team-form"><input id="teamCode" maxlength="6" placeholder="Код приглашения"><button id="teamJoin">Вступить</button></div></div>
+      <div id="teamHasGroup" class="hidden"><div class="team-heading"><strong id="teamTitle">Отряд</strong><small>Код: <b id="teamInvite">—</b></small></div>
+        <div id="teamMembers"></div><p class="team-hint">Ресурсы можно передать союзнику в радиусе 275 единиц. Передача: 25 за раз.</p><button id="teamLeave" class="team-leave">Покинуть отряд</button></div>
+    </div>
+    <div id="researchPanel" class="game-modal hidden" role="dialog" aria-label="Исследования базы">
+      <div class="panel-head"><strong>🔬 ЛАБОРАТОРИЯ МАЯКА</strong><button id="researchClose" aria-label="Закрыть">✕</button></div>
+      <p>Исследования оплачиваются личными ресурсами, но действуют на весь отряд. Для уровня 2/3 нужно улучшить маяк до 2/3.</p>
+      <div id="researchNotice" class="research-notice">Постройте собственный маяк для исследования.</div>
+      <div class="research-grid">
+        <div class="research-item"><strong>🛡 Фортификация <span id="techArmor">0/3</span></strong><small>Прочность обороны: урон постройкам −9% за уровень</small><button data-research="armor">Исследовать</button></div>
+        <div class="research-item"><strong>⚡ Инженерия <span id="techPower">0/3</span></strong><small>Автоматические башни, миномёты и огнемёты: урон +15% за уровень</small><button data-research="power">Исследовать</button></div>
+        <div class="research-item"><strong>🪓 Логистика <span id="techHarvest">0/3</span></strong><small>Добыча древесины и камня: +20% за уровень</small><button data-research="harvest">Исследовать</button></div>
+      </div>
+    </div>
+    <div id="buildPanel" class="game-modal hidden" role="dialog" aria-label="Дополнительные постройки">
+      <div class="panel-head"><strong>🏗 КАТАЛОГ ПОСТРОЕК</strong><button id="buildClose" aria-label="Закрыть">✕</button></div>
+      <p>Расширенные сооружения для защиты базы. Выберите постройку, затем установите её ЛКМ.</p>
+      <div class="craft-item"><strong>💣 Миномёт</strong><small>85 🪵 + 100 🪨 + 65 ✦ · Урон по области, перезарядка 2–3 секунды, радиус действия до 545 единиц. Улучшения до III уровня.</small><div><button data-build-extra="mortar">Выбрать миномёт</button></div></div>
+      <div class="craft-item"><strong>🔥 Огнемёт</strong><small>75 🪵 + 90 🪨 + 55 ✦ · Поджигает до 9 зомби рядом с башней и наносит периодический урон. Улучшения до III уровня.</small><div><button data-build-extra="flame">Выбрать огнемёт</button></div></div>
+    </div>
+    <div id="achievementsPanel" class="game-modal hidden" role="dialog" aria-label="Достижения выжившего">
+      <div class="panel-head"><strong>🏆 ДОСТИЖЕНИЯ</strong><button id="achievementsClose" aria-label="Закрыть">✕</button></div>
+      <p id="achievementCount">0 / 5 получено</p>
+      <div id="achievementList" class="achievement-list"></div>
+    </div>
+    <div id="baseStatsPanel" class="game-modal hidden" role="dialog" aria-label="Статистика базы">
+      <div class="panel-head"><strong>📊 СТАТИСТИКА БАЗЫ</strong><button id="baseStatsClose" aria-label="Закрыть">✕</button></div>
+      <p id="baseStatsEmpty">Постройте собственный маяк или вступите в отряд, чтобы отслеживать историю обороны.</p>
+      <div id="baseStatsContent" class="stat-list"></div>
+    </div>
+    <div id="settingsPanel" class="game-modal hidden" role="dialog" aria-label="Настройки игры">
+      <div class="panel-head"><strong>⚙ НАСТРОЙКИ</strong><button id="settingsClose" aria-label="Закрыть">✕</button></div>
+      <p>Настройки сохраняются в браузере на этом устройстве.</p>
+      <div class="account-settings"><strong>🔐 АККАУНТ</strong><div id="accountStatus">Гостевой профиль</div>
+        <div id="passwordSettings" class="hidden"><input id="oldPassword" type="password" maxlength="128" autocomplete="current-password" placeholder="Текущий пароль"><input id="newPassword" type="password" maxlength="128" autocomplete="new-password" placeholder="Новый пароль (от 10 символов)"><button id="changePassword" type="button">ИЗМЕНИТЬ ПАРОЛЬ</button></div>
+        <button id="logoutButton" type="button">ВЫЙТИ В МЕНЮ / СМЕНИТЬ АККАУНТ</button>
+      </div>
+      <div class="setting-list">
+        <label><input type="checkbox" id="settingMap" checked> Показывать мини-карту</label>
+        <label><input type="checkbox" id="settingEffects" checked> Эффекты атак и частиц</label>
+        <label><input type="checkbox" id="settingDetails" checked> Подробная текстура земли</label>
+        <label><input type="checkbox" id="settingSmooth" checked> Плавное движение камеры</label>
+      </div>
+    </div>
+    <div class="bottom-stack"><div id="buildTooltip" class="build-tooltip"><strong>Инструмент</strong><span>Сбор ресурсов и атака противников</span></div><div class="hotbar" id="hotbar">
+      <button class="slot selected" data-slot="1" data-build="axe" title="Топор и атака"><span class="slot-index">1</span><span class="slot-icon">🪓</span><span class="slot-title">Инструмент</span><span class="slot-cost">ЛКМ — удар</span></button>
+      <button class="slot" data-slot="2" data-build="core" title="Маяк"><span class="slot-index">2</span><span class="slot-icon">💠</span><span class="slot-title">Маяк</span><span class="slot-cost">Бесплатно</span></button>
+      <button class="slot" data-slot="3" data-build="wall" title="Баррикада"><span class="slot-index">3</span><span class="slot-icon">🧱</span><span class="slot-title">Баррикада</span><span class="slot-cost">18 🪵 · 8 🪨</span></button>
+      <button class="slot" data-slot="4" data-build="turret" title="Автотурель"><span class="slot-index">4</span><span class="slot-icon">🎯</span><span class="slot-title">Турель</span><span class="slot-cost">35 🪵 · 48 🪨</span></button>
+      <button class="slot" data-slot="5" data-build="mine" title="Генератор золота"><span class="slot-index">5</span><span class="slot-icon">⚡</span><span class="slot-title">Генератор</span><span class="slot-cost">38 🪵 · 25 🪨</span></button>
+      <button class="slot" data-slot="6" data-build="spike" title="Шипастая ловушка"><span class="slot-index">6</span><span class="slot-icon">🔱</span><span class="slot-title">Шипы</span><span class="slot-cost">22 🪵 · 18 🪨</span></button>
+      <button class="slot" data-slot="7" data-build="bow" title="Арбалет"><span class="slot-index">7</span><span class="slot-icon">🏹</span><span class="slot-title">Арбалет</span><span class="slot-cost">1 🪵 / выстрел</span></button>
+      <button class="slot" data-slot="8" data-build="medic" title="Медстанция"><span class="slot-index">8</span><span class="slot-icon">💚</span><span class="slot-title">Медстанция</span><span class="slot-cost">20 ✦ + ресурсы</span></button>
+      <button class="slot" data-slot="9" data-build="frost" title="Криобашня"><span class="slot-index">9</span><span class="slot-icon">❄️</span><span class="slot-title">Криобашня</span><span class="slot-cost">25 ✦ + ресурсы</span></button>
+      <button class="slot" data-slot="0" data-build="tesla" title="Разрядник"><span class="slot-index">0</span><span class="slot-icon">⚡</span><span class="slot-title">Разрядник</span><span class="slot-cost">40 ✦ + ресурсы</span></button>
+    </div><div class="control-line"><span><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> Движение</span><span><kbd>ЛКМ</kbd> Атака / постройка</span><span><kbd>E</kbd> Улучшить</span><span><kbd>F</kbd> Починить</span><span><kbd>Z X C</kbd> Улучшения</span><span><kbd>Q</kbd> Импульс</span><span><kbd>SHIFT</kbd> Рывок</span><span><kbd>H</kbd> Помощь</span></div></div>
+  </div>
+  <div id="help" class="help-panel hidden"><div class="help-top"><h2>Управление VORNIXO</h2><button id="helpClose" class="icon-button">✕</button></div><div class="help-grid"><div><kbd>W A S D</kbd> Передвижение</div><div><kbd>Мышь</kbd> Прицеливание</div><div><kbd>ЛКМ</kbd> Рубить / атаковать / строить</div><div><kbd>1–9, 0</kbd> Выбор оружия / постройки</div><div><kbd>E</kbd> Улучшить постройку под курсором</div><div><kbd>F</kbd> Починить постройку под курсором</div><div><kbd>Space</kbd> Автоатака / автострельба</div><div><kbd>Q</kbd> Защитный импульс (10 золота, 16 с)</div><div><kbd>Shift + WASD</kbd> Рывок 175 единиц (8 с, бесплатно)</div><div><kbd>Z</kbd> Усилить урон за золото</div><div><kbd>X</kbd> Увеличить максимальное здоровье</div><div><kbd>C</kbd> Увеличить скорость бега</div><div><kbd>Enter</kbd> Общий / командный чат</div><div><kbd>I</kbd> Открыть крафт (аптечка, ремкомплект, болты)</div><div><kbd>T</kbd> Управление отрядом и передача ресурсов</div><div><kbd>K</kbd> Исследования маяка и бонусы</div><div><kbd>P</kbd> Настройки игры</div><div><kbd>B</kbd> Дополнительные постройки</div><div><kbd>O</kbd> Достижения и награды</div><div><kbd>J</kbd> Статистика базы</div><div><kbd>V</kbd> Арбалет / дробовик</div><div><kbd>M</kbd> Показать / скрыть мини-карту</div><div><kbd>Esc / ПКМ</kbd> Вернуть инструмент</div></div><p>Сначала соберите древесину и камень. Установите Маяк (2), затем разместите баррикады (3), турели (4), генераторы золота (5) и шипы (6). Для дальнего боя выберите арбалет (7), переключайте его на дробовик клавишей V; медстанцию (8) или криобашню (9). Улучшения Z, X, C оплачиваются золотом. Защищайте свой маяк во время его собственных ночных волн. Для разрядника нажмите 0, для миномёта и огнемёта откройте B. Достижения доступны через O, журнал обороны базы — через J. Каждый отряд строит собственную базу. У каждого маяка собственный таймер дня и ночи, номер волны и группа зомби. Командный чат доступен только участникам отряда. Крафт доступен через I, отряды — через T, исследования — через K, настройки — через P. Лес даёт больше древесины, горы — камня, болота — золота из кристаллов.</p></div>
+  <div id="startOverlay" class="start-overlay"><div class="menu-glow"></div><div class="menu-shell"><div class="menu-copy"><div class="eyebrow"><span class="status-line"></span> МНОГОПОЛЬЗОВАТЕЛЬСКИЙ SURVIVAL · ALPHA 0.12.0</div><div class="hero-mark">V</div><h1>VORNIXO<span>.</span></h1><h2>СТРОЙ. ЗАЩИЩАЙ.<br><em>ВЫЖИВАЙ.</em></h2><p class="hero-text">Исследуйте мир, стройте башни, вооружайтесь дробовиком и отбивайте волны вместе с друзьями. Раненые берсерки становятся ещё опаснее. Весь прогресс сохраняется.</p><div class="features"><span>✦ ОТКРЫТЫЙ МИР</span><span>✦ СТРОИТЕЛЬСТВО</span><span>✦ ВОЛНЫ ЗОМБИ</span><span>✦ КООПЕРАТИВ</span><span>✦ СОХРАНЕНИЕ МИРА</span></div><div class="start-controls">
+      <div class="auth-tabs" role="group" aria-label="Способ входа"><button data-auth="login" type="button">ВОЙТИ</button><button data-auth="register" type="button">РЕГИСТРАЦИЯ</button><button data-auth="guest" type="button">ГОСТЬ</button><button data-auth="recover" type="button">ВОССТАНОВИТЬ</button></div>
+      <label for="nickname" id="nicknameLabel">ПОЗЫВНОЙ ВЫЖИВШЕГО</label><div class="namebox"><span>◈</span><input id="nickname" maxlength="18" autocomplete="nickname" placeholder="Введите никнейм" value="Выживший"></div>
+      <div class="auth-field hidden" id="accountNameField"><label for="accountName">ЛОГИН (ЛАТИНИЦА, ЦИФРЫ, _)</label><input id="accountName" type="text" maxlength="20" autocomplete="username" autocapitalize="off" spellcheck="false" placeholder="например, survivor_01"></div>
+      <div class="auth-field hidden" id="accountPasswordField"><label for="accountPassword">ПАРОЛЬ</label><input id="accountPassword" type="password" maxlength="128" autocomplete="current-password" placeholder="От 10 символов"></div>
+      <div class="auth-field hidden" id="recoveryField"><label for="recoveryCodeInput">КОД ВОССТАНОВЛЕНИЯ</label><input id="recoveryCodeInput" type="text" maxlength="64" autocomplete="off" spellcheck="false" placeholder="Сохранённый код восстановления"></div>
+      <p class="auth-info" id="authInfo">Играйте без регистрации: прогресс хранится в профиле этого браузера.</p>
+      <button id="startButton" class="play-button">НАЧАТЬ ВЫЖИВАНИЕ <span>➜</span></button><div class="connection-hint" id="connectionHint" role="status">Сервер готов к подключению</div>
+    </div><div class="disclaimer">Браузерная игра собственной разработки · Без установки клиента</div></div><div class="menu-showcase"><div class="showcase-top"><span>◉ ИГРОВОЙ МИР</span><span class="live">● LIVE WORLD</span></div><div class="showcase-visual"><div class="scanlines"></div><div class="land tile-1"></div><div class="land tile-2"></div><div class="land tile-3"></div><div class="forest-tree t1"></div><div class="forest-tree t2"></div><div class="forest-tree t3"></div><div class="forest-tree t4"></div><div class="forest-tree t5"></div><div class="ore o1"></div><div class="ore o2"></div><div class="base-wall w1"></div><div class="base-wall w2"></div><div class="base-wall w3"></div><div class="base-wall w4"></div><div class="core-icon">◆</div><div class="showcase-player"><span>V</span></div><div class="showcase-zombie z1"></div><div class="showcase-zombie z2"></div><div class="showcase-zombie z3"></div><div class="beam"></div><div class="map-overlay"><div>СЕКТОР 01: ЗЕЛЁНАЯ ЗОНА</div><strong>ОБОРОНА МАЯКА</strong><small>Построй базу до наступления ночи</small></div></div><div class="showcase-foot"><div><strong>01</strong><span>ДОБЫВАЙ</span></div><div><strong>02</strong><span>УКРЕПЛЯЙ</span></div><div><strong>03</strong><span>ВЫЖИВАЙ</span></div></div></div></div></div>
+  <div id="recoveryDialog" class="recovery-dialog hidden" role="dialog" aria-modal="true" aria-label="Код восстановления">
+    <div class="recovery-box"><div class="recovery-emoji">🔐</div><h2>СОХРАНИТЕ КОД ВОССТАНОВЛЕНИЯ</h2><p>Этот код показывается только один раз. Он нужен, если вы забудете пароль. Не передавайте его другим игрокам.</p>
+    <div id="newRecoveryCode" class="recovery-code"></div><button id="copyRecovery" type="button">СКОПИРОВАТЬ КОД</button><button id="closeRecovery" type="button">Я СОХРАНИЛ КОД</button></div>
+  </div>
+  <script src="/game.js" defer></script>
+</body>
+</html>
