@@ -1,25 +1,34 @@
 <div align="center">
 
-<img src="assets/branding/cover.jpg" alt="VORNIXO — официальная обложка проекта" width="100%" />
+<p><img src="assets/branding/cover.jpg" alt="VORNIXO — официальная обложка проекта" width="100%" /></p>
 
-<br />
-<br />
+<p><img src="assets/branding/logo.png" alt="Логотип VORNIXO" width="110" /></p>
 
-<img src="assets/branding/logo.png" alt="Логотип VORNIXO" width="110" />
+<h1>VORNIXO</h1>
 
-# VORNIXO
+<p><strong>СТРОЙ · ЗАЩИЩАЙ · ВЫЖИВАЙ</strong></p>
 
-**СТРОЙ · ЗАЩИЩАЙ · ВЫЖИВАЙ**
+<p>Многопользовательская браузерная Survival-игра о строительстве базы,<br /> добыче ресурсов и обороне от волн зомби.</p>
 
-Многопользовательская браузерная Survival-игра о строительстве базы, добыче ресурсов и обороне от волн зомби.
+<p>
+  <a href="https://github.com/Zeihos/Vornixo"><img src="https://img.shields.io/badge/ALPHA-0.14.0-8661d1?style=for-the-badge" alt="Alpha 0.14.0" /></a>
+  <a href="https://github.com/Zeihos/Vornixo/actions/workflows/ci.yml"><img src="https://github.com/Zeihos/Vornixo/actions/workflows/ci.yml/badge.svg?branch=main" alt="GitHub Actions" /></a>
+  <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/Node.js-22%2B-43853d?style=for-the-badge&amp;logo=nodedotjs&amp;logoColor=white" alt="Node.js 22+" /></a>
+</p>
 
-[![Alpha](https://img.shields.io/badge/ALPHA-0.14.0-8661d1?style=for-the-badge)](https://github.com/Zeihos/Vornixo)
-[![Проверка](https://github.com/Zeihos/Vornixo/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Zeihos/Vornixo/actions/workflows/ci.yml)
-[![Node.js](https://img.shields.io/badge/Node.js-22%2B-43853d?style=for-the-badge&logo=nodedotjs&logoColor=white)](https://nodejs.org/)
+<p>
+  <a href="#об-игре">Об игре</a> ·
+  <a href="#возможности">Возможности</a> ·
+  <a href="#скриншоты">Скриншоты</a> ·
+  <a href="#быстрый-старт">Начать играть</a> ·
+  <a href="docs/ROADMAP.md">План разработки</a>
+</p>
 
-**[О проекте](#об-игре)** · **[Возможности](#возможности)** · **[Скриншоты](#скриншоты)** · **[Начать играть](#быстрый-старт)** · **[План разработки](docs/ROADMAP.md)**
-
-[Сообщество ВКонтакте](https://vk.ru/vornixo) · [Сообщить об ошибке](https://github.com/Zeihos/Vornixo/issues/new/choose) · [Сборки GitHub Actions](https://github.com/Zeihos/Vornixo/actions/workflows/ci.yml)
+<p>
+  <a href="https://vk.ru/vornixo">Сообщество ВКонтакте</a> ·
+  <a href="https://github.com/Zeihos/Vornixo/issues/new/choose">Сообщить об ошибке</a> ·
+  <a href="https://github.com/Zeihos/Vornixo/actions/workflows/ci.yml">Сборки GitHub Actions</a>
+</p>
 
 </div>
 
@@ -161,10 +170,10 @@ npm run build:clean
 
 <div align="center">
 
-### VORNIXO
+<h3>VORNIXO</h3>
 
-**Каждая ночь может стать последней.**
+<p><strong>Каждая ночь может стать последней.</strong></p>
 
-[ВКонтакте](https://vk.ru/vornixo) · [Исходный код](https://github.com/Zeihos/Vornixo) · [Сообщить о баге](https://github.com/Zeihos/Vornixo/issues/new/choose)
+<p><a href="https://vk.ru/vornixo">ВКонтакте</a> · <a href="https://github.com/Zeihos/Vornixo">Исходный код</a> · <a href="https://github.com/Zeihos/Vornixo/issues/new/choose">Сообщить о баге</a></p>
 
 </div>
