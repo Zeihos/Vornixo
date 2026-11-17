@@ -13,8 +13,9 @@ const MAX_PLAYERS = 16;
 const MAX_CLIENT_MESSAGE = 8192, MAX_SOCKET_BACKLOG = 1024 * 1024;
 const MAX_MESSAGES_PER_SEC = 50, MESSAGE_BURST = 100;
 const LOGIN_TIMEOUT_MS = 30000, MAX_CONNECTIONS_PER_IP = 4;
-const VERSION='0.13.0', PULSE_COOLDOWN=16, PULSE_COST=10, DASH_COOLDOWN=8, DASH_DISTANCE=175;
+const VERSION='0.14.0', PULSE_COOLDOWN=16, PULSE_COST=10, DASH_COOLDOWN=8, DASH_DISTANCE=175;
 const MAX_BASES=5, BASE_RADIUS=610, BASE_SPACING=1260, MAX_BUILDINGS_PER_BASE=65;
+const MAX_WAVE_SPAWNS=36, WAVE_WARNING_SECONDS=10;
 const CRAFTS=Object.freeze({
   medkit:{wood:15,stone:10,gold:5,qty:1,label:'Аптечка'},
   repairkit:{wood:25,stone:15,gold:0,qty:1,label:'Ремкомплект'},
@@ -87,14 +88,14 @@ function createGame({records=[],world=null}={}) {
     (c.teamId?c.teamId===p.teamId:c.ownerKey===p.profileKey)));
   const bestBase=p=>cores().filter(c=>canManage(p,c)).sort((a,b)=>distance(p,a)-distance(p,b))[0]||null;
   const enemyForBase=(e,c)=>!!c&&(e.baseId===c.id||(!e.baseId&&c===g.core));
-  const freshCycle=(now)=>({phase:'day',wave:0,phaseEnds:now+42,remainingSpawns:0,nextSpawn:now+.2});
+  const freshCycle=(now)=>({phase:'day',wave:0,phaseEnds:now+42,remainingSpawns:0,nextSpawn:now+.2,paused:false,warned:false,lastObservedAt:now});
   const exportCycle=(c,now)=>({phase:c.phase,wave:c.wave,phaseRemaining:Math.max(0,c.phaseEnds-now),remainingSpawns:c.remainingSpawns,nextSpawnIn:Math.max(0,c.nextSpawn-now)});
   function importCycle(raw,now){
     if(!raw||!['day','night'].includes(raw.phase))return null;
     const valid=(v,lo,hi,d=lo)=>Number.isFinite(v)&&v>=lo&&v<=hi?v:d;
     return {phase:raw.phase,wave:Math.trunc(valid(raw.wave,0,10000)),phaseEnds:now+valid(raw.phaseRemaining,0,120),
       remainingSpawns:raw.phase==='night'?Math.trunc(valid(raw.remainingSpawns,0,100)):0,
-      nextSpawn:now+valid(raw.nextSpawnIn,0,30)};
+      nextSpawn:now+valid(raw.nextSpawnIn,0,30),paused:false,warned:false,lastObservedAt:now};
   }
   function syncLegacyFromPrimary(){
     const c=g.core&&g.cycles.get(g.core.id);
@@ -148,7 +149,7 @@ function createGame({records=[],world=null}={}) {
         const raw=Array.isArray(saved.cycles)?saved.cycles.find(c=>c.id===core.id):null;
         let cycle=importCycle(raw,now);
         if(!cycle){cycle=core===loadedCores[0]&&g.phase!=='waiting'
-          ?{phase:g.phase,wave:g.wave,phaseEnds:g.phaseEnds,remainingSpawns:g.remainingSpawns,nextSpawn:g.nextSpawn}
+          ?{phase:g.phase,wave:g.wave,phaseEnds:g.phaseEnds,remainingSpawns:g.remainingSpawns,nextSpawn:g.nextSpawn,paused:false,warned:false,lastObservedAt:now}
           :freshCycle(now);}
         g.cycles.set(core.id,cycle);
       }
@@ -442,14 +443,33 @@ function createGame({records=[],world=null}={}) {
       g.nextGold=now+5;
     }
     // Each beacon has its own day/night cycle and enemy budget.
+    // With nobody connected to defend a settlement, freeze its wave timers and combat.
+    // No changes to the world save schema are required: phaseRemaining is already relative.
+    const pausedBases=new Set();
     if(g.primaryChanged){syncLegacyFromPrimary();g.primaryChanged=false;}
     else syncPrimaryFromLegacy(); // compatibility with 0.1-0.5 and test/admin helpers
     for(const core of cores()){
       const cycle=g.cycles.get(core.id);if(!cycle)continue;
+      const elapsed=Math.max(0,now-(cycle.lastObservedAt??now));
+      cycle.lastObservedAt=now;
+      const defenders=[...g.players.values()].filter(p=>canManage(p,core));
+      if(!defenders.length){
+        cycle.paused=true;pausedBases.add(core.id);
+        cycle.phaseEnds+=elapsed;cycle.nextSpawn+=elapsed;
+        // A paused wave does not advance or grant rewards to an empty base.
+        continue;
+      }
+      cycle.paused=false;
+      if(cycle.phase==='day'&&!cycle.warned&&cycle.phaseEnds-now<=WAVE_WARNING_SECONDS&&cycle.phaseEnds>now){
+        cycle.warned=true;
+        for(const p of defenders)send(p,{type:'toast',text:`До волны ${cycle.wave+1} осталось ${Math.ceil(cycle.phaseEnds-now)} с!`});
+      }
       if(cycle.phase==='day'&&now>=cycle.phaseEnds){
         cycle.phase='night';cycle.wave++;cycle.phaseEnds=now+42;
-        cycle.remainingSpawns=Math.min(30,5+cycle.wave*4)+(cycle.wave%5===0?1:0);
-        cycle.nextSpawn=now+.2;
+        // Cooperative squads face a few additional enemies, without punishing solo bases.
+        const extra=Math.min(6,Math.max(0,defenders.length-1)*2);
+        cycle.remainingSpawns=Math.min(MAX_WAVE_SPAWNS,Math.min(30,5+cycle.wave*4)+extra+(cycle.wave%5===0?1:0));
+        cycle.warned=false;cycle.nextSpawn=now+.2;
         if(cycle.wave%5===0)announce(`БОСС: пятая волна базы «${core.ownerName}»!`);
         announce(`База «${core.ownerName}»: волна ${cycle.wave}!`);
       }
@@ -461,6 +481,7 @@ function createGame({records=[],world=null}={}) {
     }
     syncLegacyFromPrimary();
     for(const b of g.buildings){
+      if(pausedBases.has(b.baseId))continue;
       if(b.type==='turret' && now-b.lastShot>Math.max(.36,.90-b.level*.12)){
         const target=g.enemies.filter(e=>enemyForBase(e,coreFor(b))&&distance(b,e)<305+b.level*42).sort((a,c)=>distance(a,b)-distance(c,b))[0];
         if(target){target.hp-=(target.kind==='tank'?.58:1)*22*b.level*(1+.15*(coreFor(b)?.tech?.power||0));b.lastShot=now;g.bullets.push({id:nextId(),x:b.x,y:b.y,tx:target.x,ty:target.y,kind:'turret',until:now+.22});
@@ -518,6 +539,7 @@ function createGame({records=[],world=null}={}) {
     }
     // DoT and shaman support are authoritative and restricted to the enemy's assigned base.
     for(const e of g.enemies){
+      if(pausedBases.has(e.baseId))continue;
       if(e.burnUntil>now&&now-(e.lastBurn||0)>=.5){e.hp-=7;e.lastBurn=now;}
       if(e.kind==='shaman'&&e.hp>0&&now-(e.lastHeal||0)>=2.1){
         const allies=g.enemies.filter(a=>a.id!==e.id&&a.baseId===e.baseId&&a.hp>0&&a.hp<a.maxHp&&distance(a,e)<180).slice(0,5);
@@ -530,6 +552,7 @@ function createGame({records=[],world=null}={}) {
     g.enemies=g.enemies.filter(e=>e.hp>0);
     g.bullets=g.bullets.filter(b=>b.until>now);
     for(const e of g.enemies){
+      if(pausedBases.has(e.baseId))continue;
       const targetCore=cores().find(c=>c.id===(e.baseId||g.core?.id));if(!targetCore)continue;
       const nearby=g.buildings.filter(b=>b.baseId===targetCore.id&&distance(b,e)<RECIPES[b.type].size/2+39).sort((a,b)=>distance(a,e)-distance(b,e));
       const nearestPlayer=[...g.players.values()].filter(p=>p.alive&&distance(p,e)<32).sort((a,b)=>distance(a,e)-distance(b,e))[0];
@@ -560,8 +583,8 @@ function createGame({records=[],world=null}={}) {
     if(!g.core)return;
     for(const core of cores()){
       const cycle=g.cycles.get(core.id);
-      if(!cycle||cycle.phase!=='night'||cycle.remainingSpawns>0||g.enemies.some(e=>enemyForBase(e,core)))continue;
-      cycle.phase='day';cycle.phaseEnds=now+43;core.stats.wavesCleared++;
+      if(!cycle||cycle.paused||cycle.phase!=='night'||cycle.remainingSpawns>0||g.enemies.some(e=>enemyForBase(e,core)))continue;
+      cycle.phase='day';cycle.phaseEnds=now+43;cycle.warned=false;core.stats.wavesCleared++;
       for(const p of g.players.values())if(canManage(p,core)){p.gold+=18+cycle.wave*4;p.score+=100*cycle.wave;p.stats.bestWave=Math.max(p.stats.bestWave,cycle.wave);checkAchievements(p);}
       updateRecords();announce(`База «${core.ownerName}» отбила волну ${cycle.wave}!`);
     }
@@ -571,7 +594,7 @@ function createGame({records=[],world=null}={}) {
   function snapshot(now,viewer=null){const mine=viewer?bestBase(viewer):g.core;
     const liveCores=cores();
     const bases=liveCores.map(b=>{const c=g.cycles.get(b.id)||freshCycle(now);
-      return {id:b.id,ownerName:b.ownerName,phase:c.phase,wave:c.wave,remaining:Math.max(0,Math.ceil(c.phaseEnds-now)),
+      return {id:b.id,ownerName:b.ownerName,phase:c.phase,wave:c.wave,paused:!!c.paused,remaining:Math.max(0,Math.ceil(c.phaseEnds-now)),
         enemies:g.enemies.filter(e=>e.baseId===b.id).length,remainingSpawns:c.remainingSpawns,canManage:viewer?canManage(viewer,b):false};});
     const viewing=mine||(!viewer?g.core:liveCores.slice().sort((a,b)=>distance(viewer,a)-distance(viewer,b))[0]);
     const baseStatus=bases.find(b=>b.id===viewing?.id)||null;
