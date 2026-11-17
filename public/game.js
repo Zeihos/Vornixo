@@ -149,7 +149,7 @@
       }else if(msg.type==='account_session'){
         localSet('vornixo_account_session',msg.session);localSet('vornixo_account_username',msg.username);
         $('oldPassword').value='';$('newPassword').value='';
-      }else if(msg.type==='state'){combatFeedback(state,msg);state=msg;if(!lastMsgId&&state.chat.length)lastMsgId=state.chat[0].id-1;updateChat();}
+      }else if(msg.type==='state'){if(msg.resources===null)msg.resources=state?.resources||[];combatFeedback(state,msg);state=msg;if(!lastMsgId&&state.chat.length)lastMsgId=state.chat[0].id-1;updateChat();}
       else if(msg.type==='pong'){if(Number.isFinite(msg.sent)){const lag=Math.max(0,Math.round(performance.now()-msg.sent));el.ping.textContent='· '+lag+' мс';}}
       else if(msg.type==='toast')toast(msg.text);
       else if(msg.type==='team_chat')appendChat({name:'[ОТРЯД] '+msg.name,text:msg.text,private:true});
