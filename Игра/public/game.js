@@ -35,7 +35,29 @@
   let sw=innerWidth,sh=innerHeight,dpr=1,cam={x:700,y:700},targetCam={x:700,y:700};
   let pointer={x:sw/2,y:sh/2},mouseDown=false,tool=0,autoAttack=false,showMap=settings.map,helpOpen=false;
   const keys={up:false,down:false,left:false,right:false};
-  const sparks=[],floaters=[];let lastSwingAt=0,lastFrame=performance.now(),lastUI=0;
+  const sparks=[],floaters=[],hitFlash=new Map(),motionUntil=new Map();
+  let cameraKick=0,lastSwingAt=0,lastFrame=performance.now(),lastUI=0;
+  // Snapshot deltas drive purely cosmetic effects; health and damage remain server-authoritative.
+  function combatFeedback(previous,next){
+    if(!settings.effects||!previous||!next)return;
+    const now=performance.now();
+    const groups=[['e',previous.enemies,next.enemies],['b',previous.buildings,next.buildings],['p',previous.players,next.players]];
+    for(const [prefix,oldList,newList] of groups){
+      const oldById=new Map((oldList||[]).map(item=>[item.id,item]));
+      for(const item of newList||[]){
+        const old=oldById.get(item.id);if(!old)continue;
+        if(Math.hypot(item.x-old.x,item.y-old.y)>3)motionUntil.set(prefix+item.id,now+230);
+        const damage=old.hp-item.hp;
+        if(!Number.isFinite(damage)||damage<=0||damage>50000)continue;
+        hitFlash.set(prefix+item.id,now+180);
+        if(floaters.length<48 && visible(item.x,item.y,90))floaters.push({x:item.x,y:item.y-(prefix==='b'?44:30),value:'-'+Math.ceil(damage),life:.75,total:.75,color:prefix==='p'?'#ffc2ae':prefix==='b'?'#ffce8a':'#ffead0'});
+        if(prefix==='p'&&item.id===playerId)cameraKick=Math.min(11,cameraKick+Math.min(6,damage*.2));
+      }
+    }
+    // Without pruning, visited IDs could accumulate during very long sessions.
+    for(const [key,until] of hitFlash)if(until<now)hitFlash.delete(key);
+    for(const [key,until] of motionUntil)if(until<now)motionUntil.delete(key);
+  }
   const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
   const hash=(x,y)=>{let n=Math.imul(x,374761393)+Math.imul(y,668265263);n=Math.imul(n^(n>>>13),1274126177);return ((n^(n>>>16))>>>0)/4294967295;};
   const dist=(a,b)=>Math.hypot(a.x-b.x,a.y-b.y);
@@ -127,14 +149,14 @@
       }else if(msg.type==='account_session'){
         localSet('vornixo_account_session',msg.session);localSet('vornixo_account_username',msg.username);
         $('oldPassword').value='';$('newPassword').value='';
-      }else if(msg.type==='state'){state=msg;if(!lastMsgId&&state.chat.length)lastMsgId=state.chat[0].id-1;updateChat();}
+      }else if(msg.type==='state'){combatFeedback(state,msg);state=msg;if(!lastMsgId&&state.chat.length)lastMsgId=state.chat[0].id-1;updateChat();}
       else if(msg.type==='pong'){if(Number.isFinite(msg.sent)){const lag=Math.max(0,Math.round(performance.now()-msg.sent));el.ping.textContent='· '+lag+' мс';}}
       else if(msg.type==='toast')toast(msg.text);
       else if(msg.type==='team_chat')appendChat({name:'[ОТРЯД] '+msg.name,text:msg.text,private:true});
     });
     ws.addEventListener('close',()=>{
       el.ping.textContent='· — мс';toggleCraft(false);toggleTeam(false);toggleResearch(false);toggleSettings(false);closeExtras();
-      connected=false;state=null;started=false;playerId=null;accountUsername=null;
+      connected=false;state=null;started=false;playerId=null;accountUsername=null;floaters.length=0;hitFlash.clear();motionUntil.clear();cameraKick=0;
       el.start.classList.remove('hidden');el.ui.classList.add('hidden');el.btn.disabled=false;
       setMode(localGet('vornixo_account_username')?'login':'guest');
       if(!intentionalExit)el.hint.textContent='Соединение закрыто. Проверьте сервер или данные для входа.';
@@ -203,8 +225,8 @@
   function toggleHelp(force){helpOpen=force??!helpOpen;el.help.classList.toggle('hidden',!helpOpen);}
   el.helpClose.addEventListener('click',()=>toggleHelp(false));
   function keyChange(e,isDown){
-    if(chatting())return;
-    if(e.target===el.name||['teamName','teamCode'].includes(e.target?.id))return;
+    if(chatting()||e.target?.isContentEditable||e.target?.matches?.('input, textarea, select'))return;
+    if(!started)return;
     if(isDown&&!e.repeat){
       if(e.key==='Enter'){openChat();e.preventDefault();return;}
       if(e.key==='h'||e.key==='H'){toggleCraft(false);toggleTeam(false);toggleResearch(false);toggleSettings(false);closeExtras();toggleHelp();return;}
@@ -347,17 +369,21 @@
       ctx.fillStyle=b.canManage?'#b6ffe3':'#ffbfaa';ctx.font='bold 12px Segoe UI';ctx.textAlign='center';
       ctx.shadowBlur=5;ctx.shadowColor='#04221d';ctx.fillText((b.ownerName||'База').slice(0,18),x,y-74);ctx.shadowBlur=0;
     }
+    if(!ghost&&hitFlash.get('b'+b.id)>t){circle(x,y,type==='core'?46:31,'#fff0cc24','#fff0cc80',3);}
     if(!ghost&&b.hp<b.maxHp)hpBar(x,y-(type==='core'?53:37),44,b.hp/b.maxHp);
     ctx.restore();
   }
   function player(p,t){const {x,y}=p;ctx.save();ctx.globalAlpha=p.alive?1:.3;
+    const moving=settings.effects&&motionUntil.get('p'+p.id)>t;const step=moving?Math.sin(t*.018+p.id)*2.8:0;
     circle(x+5,y+9,24,'#0a2018aa');
+    ctx.translate(0,step);
     ctx.save();ctx.translate(x,y);ctx.rotate(p.aim||0);
     rounded(-19,-14,36,30,12,p.id===playerId?'#547c6b':'#526b83');
     rounded(-14,-16,24,31,8,p.id===playerId?'#95cbaa':'#9cb6ce');
     rounded(12,-5,22,10,5,'#d3b482');rounded(25,-13,7,24,2,'#d6e0c3');
     circle(-7,-8,14,'#e9ca9d','#755b47',3);rounded(-17,-19,19,11,4,'#24483c');
     ctx.restore();
+    if(hitFlash.get('p'+p.id)>t)circle(x,y,28,'#ff9a7b34','#ffddc2b9',3);
     if(p.id===playerId)circle(x,y,30,null,'#bcf2d74a',2);
     if(p.pulsing){circle(x,y,205,'#83e7ee15','#8dfcf5a6',5);circle(x,y,125,null,'#c8fff7c0',2);}
     if(p.hp<p.maxHp)hpBar(x,y-40,42,p.hp/p.maxHp,p.hp>35?'#8ae2ad':'#e59071');
@@ -377,6 +403,7 @@
     if(boss){ctx.fillStyle='#fff0e4';ctx.textAlign='center';ctx.font='bold 12px Segoe UI';ctx.fillText('БОСС',0,-r-21);}
     if(e.slowed)circle(0,0,r+6,null,'#92e9ffb9',3);
     if(e.burning)circle(0,0,r+7,null,'#ffad59b9',2);
+    if(hitFlash.get('e'+e.id)>t)circle(0,0,r+3,'#fff1d426','#fff2d5a8',3);
     ctx.restore();if(e.hp<e.maxHp)hpBar(x,y-r-17,46,e.hp/e.maxHp,'#e9a57a');
   }
   function drawGhost(t){const p=me();if(!p||tool===0||tool===6||helpOpen)return;const pt=worldAtPointer();const x=Math.round(pt.x/54)*54,y=Math.round(pt.y/54)*54;
@@ -398,22 +425,32 @@
       grad.addColorStop(0,'#58d9ad2d');grad.addColorStop(1,'#58d9ad00');ctx.fillStyle=grad;ctx.fillRect(x-275,y-275,550,550);}
     ctx.restore();
   }
-  function renderParticles(dt){for(let i=sparks.length-1;i>=0;i--){const s=sparks[i];s.life-=dt;if(s.life<=0){sparks.splice(i,1);continue;}
+  function renderParticles(dt){
+    for(let i=sparks.length-1;i>=0;i--){const s=sparks[i];s.life-=dt;if(s.life<=0){sparks.splice(i,1);continue;}
       if(s.type==='swing'){ctx.save();ctx.strokeStyle=`rgba(237,248,193,${s.life/s.total})`;ctx.lineWidth=5;ctx.beginPath();ctx.arc(s.x,s.y,27,s.angle-.8,s.angle+.7);ctx.stroke();ctx.restore();}
-    }}
+    }
+    ctx.save();ctx.font='bold 16px Segoe UI';ctx.textAlign='center';ctx.lineWidth=3;ctx.strokeStyle='#0b1c18';
+    for(let i=floaters.length-1;i>=0;i--){const f=floaters[i];f.life-=dt;
+      if(f.life<=0){floaters.splice(i,1);continue;}
+      const progress=1-f.life/f.total,y=f.y-progress*38;
+      ctx.globalAlpha=Math.min(1,f.life/.25);ctx.strokeText(f.value,f.x,y);ctx.fillStyle=f.color;ctx.fillText(f.value,f.x,y);
+    }
+    ctx.restore();
+  }
   function drawCrosshair(){if(!started||helpOpen)return;ctx.save();ctx.setTransform(dpr,0,0,dpr,0,0);ctx.strokeStyle=tool===0?'#e6ffdd':'#f4e1a2';ctx.lineWidth=1.6;ctx.beginPath();ctx.arc(pointer.x,pointer.y,9,0,6.29);ctx.moveTo(pointer.x-15,pointer.y);ctx.lineTo(pointer.x-5,pointer.y);ctx.moveTo(pointer.x+5,pointer.y);ctx.lineTo(pointer.x+15,pointer.y);ctx.moveTo(pointer.x,pointer.y-15);ctx.lineTo(pointer.x,pointer.y-5);ctx.moveTo(pointer.x,pointer.y+5);ctx.lineTo(pointer.x,pointer.y+15);ctx.stroke();ctx.restore();}
   function draw(t){const dt=Math.min(.06,(t-lastFrame)/1000);lastFrame=t;
     ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,sw,sh);
     const p=me();if(p){targetCam.x=p.x-sw/2;targetCam.y=p.y-sh/2;
       cam.x+= (targetCam.x-cam.x)*(settings.smooth?Math.min(1,dt*9):1);cam.y+=(targetCam.y-cam.y)*(settings.smooth?Math.min(1,dt*9):1);
       cam.x=clamp(cam.x,0,Math.max(0,3200-sw));cam.y=clamp(cam.y,0,Math.max(0,2400-sh));}
-    ctx.save();ctx.translate(-cam.x,-cam.y);renderGround(t);
+    ctx.save();if(settings.effects&&cameraKick>.01){ctx.translate(Math.sin(t*.13)*cameraKick,Math.cos(t*.11)*cameraKick*.6);cameraKick=Math.max(0,cameraKick-dt*35);}
+    ctx.translate(-cam.x,-cam.y);renderGround(t);
     if(state){
       for(const r of state.resources){if(!visible(r.x,r.y))continue;if(r.type==='tree')tree(r,t);else if(r.type==='rock')rock(r);else crystal(r,t);}
       const things=[...state.buildings.map(x=>({...x,kind:'b'})),...state.enemies.map(x=>({...x,kind:'e'})),...state.players.map(x=>({...x,kind:'p'}))].sort((a,b)=>a.y-b.y);
       for(const x of things){if(!visible(x.x,x.y))continue;if(x.kind==='b')drawBuilding(x,t);else if(x.kind==='e')enemy(x,t);else player(x,t);}
       for(const b of state.bullets){ctx.strokeStyle=b.kind==='dash'?'#9fffe6':b.kind==='heal'?'#c9acff':b.kind==='flame'?'#ff7b46':b.kind==='flare'?'#ffb85b':b.kind==='acid'?'#c4f16a':b.kind==='tesla'?'#8bf9ff':b.kind==='mortar'?'#ffb777':b.kind==='shotgun'?'#ffe2aa':b.kind==='arrow'?'#b2f8ff':'#ffd985';ctx.lineWidth=b.kind==='flame'?6:b.kind==='shotgun'?5:b.kind==='mortar'?7:b.kind==='tesla'?4:3;ctx.shadowColor=b.kind==='acid'?'#b3eb62':'#ffe49b';ctx.shadowBlur=12;ctx.beginPath();ctx.moveTo(b.x,b.y);ctx.lineTo(b.tx,b.ty);ctx.stroke();ctx.shadowBlur=0;}
-      drawGhost(t);if(settings.effects)renderParticles(dt);else sparks.length=0;
+      drawGhost(t);if(settings.effects)renderParticles(dt);else{sparks.length=0;floaters.length=0;cameraKick=0;hitFlash.clear();motionUntil.clear();}
     }
     ctx.restore();drawNight(t);drawCrosshair();
     if(t-lastUI>110){updateUI();lastUI=t;}
@@ -421,6 +458,7 @@
   }
   function updateUI(){const p=me();if(!p||!state)return;
     const inv=p.inventory||{};
+    const hpRatio=p.maxHp>0?p.hp/p.maxHp:1;document.getElementById('vignette').classList.toggle('critical-health',p.alive&&hpRatio<.3);
     $('qtyMedkit').textContent=inv.medkit||0;$('qtyRepairkit').textContent=inv.repairkit||0;$('qtyBolts').textContent=inv.bolts||0;$('qtyFlare').textContent=inv.flare||0;$('qtyShells').textContent=inv.shells||0;
     el.weaponToggle.textContent=weaponMode==='shotgun'?`🔫 ДРОБОВИК · ${inv.shells||0} < V >`:'🏹 АРБАЛЕТ · V';
     for(const b of el.craftPanel.querySelectorAll('[data-craft]')){
