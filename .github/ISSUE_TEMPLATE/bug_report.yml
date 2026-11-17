@@ -1,0 +1,61 @@
+name: "🐛 Сообщить об ошибке"
+description: "Помогите исправить проблему в VORNIXO"
+title: "[Баг] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Спасибо за сообщение! Не прикладывайте пароли, токены, содержимое папки data или другую личную информацию.
+  - type: input
+    id: version
+    attributes:
+      label: Версия игры
+      description: Например, Alpha 0.14.0
+      placeholder: Alpha 0.14.0
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Где возникает проблема?
+      options:
+        - Запуск сервера
+        - Подключение и аккаунт
+        - Мультиплеер и отряды
+        - Добыча и строительство
+        - Бои и зомби
+        - Интерфейс и графика
+        - Сохранения
+        - Другое
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Как повторить ошибку?
+      description: Перечислите действия по порядку
+      placeholder: |
+        1. Запустить игру
+        2. Открыть ...
+        3. Выполнить ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Что ожидалось?
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Что произошло на самом деле?
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Скриншоты и сообщения об ошибках
+      description: Удалите личные данные, токены и пароли из логов перед отправкой
+    validations:
+      required: false
