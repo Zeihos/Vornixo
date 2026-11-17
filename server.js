@@ -13,7 +13,7 @@ const MAX_PLAYERS = 16;
 const MAX_CLIENT_MESSAGE = 8192, MAX_SOCKET_BACKLOG = 1024 * 1024;
 const MAX_MESSAGES_PER_SEC = 50, MESSAGE_BURST = 100;
 const LOGIN_TIMEOUT_MS = 30000, MAX_CONNECTIONS_PER_IP = 4;
-const VERSION='0.14.0', PULSE_COOLDOWN=16, PULSE_COST=10, DASH_COOLDOWN=8, DASH_DISTANCE=175;
+const VERSION='0.15.0', PULSE_COOLDOWN=16, PULSE_COST=10, DASH_COOLDOWN=8, DASH_DISTANCE=175;
 const MAX_BASES=5, BASE_RADIUS=610, BASE_SPACING=1260, MAX_BUILDINGS_PER_BASE=65;
 const MAX_WAVE_SPAWNS=36, WAVE_WARNING_SECONDS=10;
 const CRAFTS=Object.freeze({
@@ -66,9 +66,10 @@ function skillCost(skill,level){return SKILLS[skill].base + level*25;}
 function createGame({records=[],world=null}={}) {
   let seed = 929137; const rand = () => {seed = (Math.imul(seed,1664525)+1013904223)>>>0;return seed/4294967296;};
   const g = { players:new Map(), resources:[], buildings:[], enemies:[], bullets:[], chat:[], core:null, cycles:new Map(), primaryChanged:false,
-    phase:'waiting', phaseEnds:0, wave:0, remainingSpawns:0, nextSpawn:0, nextId:1, nextGold:0, spawnOrder:0, records:Array.isArray(records)?records.slice(0,10):[], startedAt:Date.now()/1000 };
+    phase:'waiting', phaseEnds:0, wave:0, remainingSpawns:0, nextSpawn:0, nextId:1, resourceRevision:0, nextGold:0, spawnOrder:0, records:Array.isArray(records)?records.slice(0,10):[], startedAt:Date.now()/1000 };
   const nextId = () => g.nextId++;
   const resetResources = () => {
+    g.resourceRevision++;
     g.resources=[];
     for (let i=0; i<215; i++) {
       let x,y,attempt=0;
@@ -139,7 +140,7 @@ function createGame({records=[],world=null}={}) {
         c.stats=defaultBaseStats();
         for(const field of Object.keys(c.stats))if(Number.isSafeInteger(counts?.[field])&&counts[field]>=0&&counts[field]<=1000000000)c.stats[field]=counts[field];
       }
-      g.resources=nodes;g.buildings=bs;g.core=loadedCores[0]||null;g.enemies=g.core?enemies:[];g.bullets=[];
+      g.resources=nodes;g.resourceRevision++;g.buildings=bs;g.core=loadedCores[0]||null;g.enemies=g.core?enemies:[];g.bullets=[];
       g.phase=g.core?(saved.phase==='night'?'night':'day'):'waiting';g.wave=Math.trunc(valid(saved.wave,0,10000));
       g.phaseEnds=g.core?now+valid(saved.phaseRemaining,0,120):0;
       g.remainingSpawns=g.phase==='night'?Math.trunc(valid(saved.remainingSpawns,0,70)):0;
@@ -280,7 +281,7 @@ function createGame({records=[],world=null}={}) {
     let target=g.enemies.filter(e=>distance(p,e)<108&&distance(e,pos)<78).sort((a,b)=>distance(a,pos)-distance(b,pos))[0];
     if(target){target.hp-=(target.kind==='tank'?.58:1)*(31+9*p.skills.power); if(target.hp<=0){recordKill(target);g.enemies=g.enemies.filter(e=>e.id!==target.id);p.kills++;p.score+=25;p.gold+=7;checkAchievements(p);}return;}
     const node=g.resources.filter(n=>n.hp>0&&distance(p,n)<115&&distance(n,pos)<75).sort((a,b)=>distance(a,pos)-distance(b,pos))[0];
-    if(node){node.hp--; const tech=bestBase(p)?.tech?.harvest||0,scale=1+.2*tech,biome=biomeAt(node.x,node.y);
+    if(node){node.hp--;g.resourceRevision++; const tech=bestBase(p)?.tech?.harvest||0,scale=1+.2*tech,biome=biomeAt(node.x,node.y);
       if(node.type==='tree')p.wood+=Math.round((14+(biome==='forest'?3:0))*scale);
       else if(node.type==='rock')p.stone+=Math.round((12+(biome==='highlands'?4:0))*scale);
       else {p.stone+=Math.round(8*scale);p.gold+=3+(biome==='marsh'?2:0);}
@@ -436,7 +437,7 @@ function createGame({records=[],world=null}={}) {
       p.x=clamp(p.x+dx/len*speed*d,28,WORLD.width-28);
       p.y=clamp(p.y+dy/len*speed*d,28,WORLD.height-28);
     }
-    for(const node of g.resources)if(node.hp<=0 && now>=node.respawn)node.hp=node.maxHp;
+    for(const node of g.resources)if(node.hp<=0 && now>=node.respawn){node.hp=node.maxHp;g.resourceRevision++;}
     if(!g.core)return;
     if(now>=g.nextGold){
       for(const p of g.players.values())p.gold+=g.buildings.filter(b=>b.type==='mine'&&canManage(p,coreFor(b))).reduce((n,b)=>n+b.level*5,0);
@@ -551,11 +552,17 @@ function createGame({records=[],world=null}={}) {
     for(const e of g.enemies)if(e.hp<=0)recordKill(e);
     g.enemies=g.enemies.filter(e=>e.hp>0);
     g.bullets=g.bullets.filter(b=>b.until>now);
+    // Build once per simulation tick instead of searching every settlement's structures for each zombie.
+    const activeBases=cores(),baseById=new Map(activeBases.map(c=>[c.id,c]));
+    const buildingsByBase=new Map(activeBases.map(c=>[c.id,[]]));
+    for(const b of g.buildings)if(b.hp>0&&buildingsByBase.has(b.baseId))buildingsByBase.get(b.baseId).push(b);
+    const livePlayers=[...g.players.values()].filter(p=>p.alive);
     for(const e of g.enemies){
       if(pausedBases.has(e.baseId))continue;
-      const targetCore=cores().find(c=>c.id===(e.baseId||g.core?.id));if(!targetCore)continue;
-      const nearby=g.buildings.filter(b=>b.baseId===targetCore.id&&distance(b,e)<RECIPES[b.type].size/2+39).sort((a,b)=>distance(a,e)-distance(b,e));
-      const nearestPlayer=[...g.players.values()].filter(p=>p.alive&&distance(p,e)<32).sort((a,b)=>distance(a,e)-distance(b,e))[0];
+      const targetCore=baseById.get(e.baseId||g.core?.id);if(!targetCore)continue;
+      const baseBuildings=buildingsByBase.get(targetCore.id)||[];
+      const nearby=baseBuildings.filter(b=>distance(b,e)<RECIPES[b.type].size/2+39).sort((a,b)=>distance(a,e)-distance(b,e));
+      const nearestPlayer=livePlayers.filter(p=>distance(p,e)<32).sort((a,b)=>distance(a,e)-distance(b,e))[0];
       if(nearby.length){
         const b=nearby[0];if(now-e.lastAttack>.75){const damage=e.damage*(e.kind==='berserker'&&e.hp<e.maxHp*.5?1.6:1)*(e.kind==='sapper'&&b.type==='wall'?2:1)*(1-.09*(targetCore.tech?.armor||0));b.hp-=damage;targetCore.stats.damageTaken+=Math.round(damage);e.lastAttack=now;}
       }else if(e.kind==='spitter'&&distance(e,targetCore)<255){
@@ -570,8 +577,14 @@ function createGame({records=[],world=null}={}) {
       }else if(nearestPlayer){
         if(now-e.lastAttack>.8){nearestPlayer.hp-=e.damage;e.lastAttack=now;if(nearestPlayer.hp<=0){nearestPlayer.alive=false;nearestPlayer.respawnAt=now+3;nearestPlayer.wood=Math.floor(nearestPlayer.wood*.9);nearestPlayer.stone=Math.floor(nearestPlayer.stone*.9);}}
       }else{
-        const priority=(e.kind==='raider'||e.kind==='sapper')?g.buildings.filter(b=>b.baseId===targetCore.id&&b.type===(e.kind==='raider'?'mine':'wall')).sort((a,b)=>distance(a,e)-distance(b,e))[0]:null;
-        const target=priority || [...g.players.values()].filter(p=>p.alive&&distance(p,e)<160).sort((a,b)=>distance(a,e)-distance(b,e))[0] || targetCore;
+        const special=e.kind==='raider'?'mine':e.kind==='sapper'?'wall':null;
+        // Seek specialist targets only locally: distant generators should not make raiders ignore defenses.
+        const priority=special?baseBuildings.filter(b=>b.type===special&&distance(b,e)<460).sort((a,b)=>distance(a,e)-distance(b,e))[0]:null;
+        // Walls between the invader and beacon become meaningful obstacles instead of being bypassed.
+        const wall=baseBuildings.filter(b=>b.type==='wall'&&distance(b,e)<170&&
+          distance(b,targetCore)<distance(e,targetCore)+45).sort((a,b)=>distance(a,e)-distance(b,e))[0];
+        const player=livePlayers.filter(p=>distance(p,e)<160).sort((a,b)=>distance(a,e)-distance(b,e))[0];
+        const target=priority||wall||player||targetCore;
         const dx=target.x-e.x,dy=target.y-e.y,len=Math.hypot(dx,dy)||1;
         const speed=e.speed*(e.slowUntil>now?.47:1)*(e.kind==='berserker'&&e.hp<e.maxHp*.5?1.75:1);
         e.x=clamp(e.x+dx/len*speed*d,20,WORLD.width-20);e.y=clamp(e.y+dy/len*speed*d,20,WORLD.height-20);
@@ -591,7 +604,7 @@ function createGame({records=[],world=null}={}) {
     if(!g.primaryChanged)syncLegacyFromPrimary();
 
   }
-  function snapshot(now,viewer=null){const mine=viewer?bestBase(viewer):g.core;
+  function snapshot(now,viewer=null,{includeResources=true}={}){const mine=viewer?bestBase(viewer):g.core;
     const liveCores=cores();
     const bases=liveCores.map(b=>{const c=g.cycles.get(b.id)||freshCycle(now);
       return {id:b.id,ownerName:b.ownerName,phase:c.phase,wave:c.wave,paused:!!c.paused,remaining:Math.max(0,Math.ceil(c.phaseEnds-now)),
@@ -604,7 +617,7 @@ function createGame({records=[],world=null}={}) {
       id,name,x:Math.round(x),y:Math.round(y),aim,hp:Math.max(0,Math.round(hp)),maxHp,kills,score,alive,teamId,dashing:dashingUntil>now,pulsing:pulseUntil>now,
       ...(viewer?.id===id||!viewer?{wood,stone,gold,skills,inventory,pulseCooldown:Math.max(0,Math.ceil(PULSE_COOLDOWN-(now-lastPulse))),dashCooldown:Math.max(0,Math.ceil(DASH_COOLDOWN-(now-lastDash)))}:{})
     })),
-    resources:g.resources.filter(n=>n.hp>0).map(({id,x,y,type,hp,maxHp})=>({id,x,y,type,hp,maxHp})),
+    resources:includeResources?g.resources.filter(n=>n.hp>0).map(({id,x,y,type,hp,maxHp})=>({id,x,y,type,hp,maxHp})):null,
     buildings:g.buildings.map(({id,x,y,type,hp,maxHp,level,baseId,teamId,ownerName})=>({id,x,y,type,hp:Math.max(0,hp),maxHp,level,baseId,...(type==='core'?{teamId,ownerName,canManage:viewer?canManage(viewer,g.buildings.find(b=>b.id===id)):false}:{})})),
     enemies:g.enemies.map(({id,x,y,hp,maxHp,big,kind,slowUntil,baseId,burnUntil})=>({id,x:Math.round(x),y:Math.round(y),hp:Math.max(0,hp),maxHp,big,kind,baseId,slowed:slowUntil>now,burning:burnUntil>now})),
     bullets:g.bullets, chat:g.chat.slice(-6), records:g.records, ownedBaseId:mine?.id||null,
@@ -947,7 +960,14 @@ function startServer({port=PORT,host=HOST,dataFile=path.join(__dirname,'data','r
   },50);
   const broadcast=setInterval(()=>{
     if(!peers.size)return;
-    for(const p of game.g.players.values())if(p.socket&&!p.socket.closed)p.socket.sendJSON({...game.snapshot(Date.now()/1000,p),myTeam:teamInfo(p)});
+    const now=Date.now()/1000;
+    for(const p of game.g.players.values())if(p.socket&&!p.socket.closed){
+      // Resource nodes rarely change; send the initial list and updates only when their revision changes.
+      const revision=game.g.resourceRevision;
+      const includeResources=p._sentResourceRevision!==revision;
+      const sent=p.socket.sendJSON({...game.snapshot(now,p,{includeResources}),myTeam:teamInfo(p)});
+      if(sent&&includeResources)p._sentResourceRevision=revision;
+    }
   },150);
   const persistence=setInterval(saveAll,10000);
   server.listen(port,host,()=>console.log(`\n VORNIXO Alpha ${VERSION} запущен: http://localhost:${server.address().port}\n Игроки в одной сети: http://<IP_компьютера>:${server.address().port}\n Остановить: Ctrl+C\n`));
