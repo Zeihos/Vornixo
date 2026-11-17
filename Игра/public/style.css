@@ -105,3 +105,8 @@
 .recovery-box button{display:block;width:100%;margin-top:11px;background:#2e8765;color:#fff;padding:12px;border:1px solid #81ecb9;border-radius:8px;font-weight:800}
 .recovery-box #closeRecovery{background:#294339}
 @media(max-width:500px){.auth-tabs{grid-template-columns:repeat(2,1fr)}}
+
+/* Alpha 0.13: urgent health feedback. Only cosmetic; no input interception. */
+#vignette.critical-health{background:radial-gradient(ellipse at center,transparent 35%,rgba(84,13,22,.62) 100%);animation:vornixo-warning 1.4s ease-in-out infinite alternate}
+@keyframes vornixo-warning{from{opacity:.62}to{opacity:1}}
+@media(prefers-reduced-motion:reduce){#vignette.critical-health{animation:none}}

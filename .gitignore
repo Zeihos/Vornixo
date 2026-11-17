@@ -1,0 +1,5 @@
+# Runtime saves are private and generated automatically.
+Игра/data/*
+!Игра/data/.gitkeep
+*.tmp
+node_modules/
