@@ -533,22 +533,23 @@
     el.dash.disabled=!!p.dashCooldown||!p.alive;
     el.info.textContent=`${p.name} · ${p.kills} убийств · ${p.score} очков`;el.online.textContent=`· ${state.players.length}/16 · баз ${state.baseCount||0}/${state.maxBases||5}`;
     const c=core();let total=42;const timing=state.baseStatus||{phase:'waiting',wave:0,remaining:0,enemies:0};
-    if(timing.phase==='waiting'){el.waveTitle.textContent='ОЖИДАНИЕ';el.waveClock.textContent='—';el.waveDesc.textContent='Постройте маяк для старта';}
+    if(timing.paused){el.waveTitle.textContent='⏸ БАЗА НА ПАУЗЕ';el.waveClock.textContent='—';el.waveDesc.textContent='Нет защитников в сети';}
+    else if(timing.phase==='waiting'){el.waveTitle.textContent='ОЖИДАНИЕ';el.waveClock.textContent='—';el.waveDesc.textContent='Постройте маяк для старта';}
     else if(timing.phase==='day'){el.waveTitle.textContent='☀ ДЕНЬ · ПОДГОТОВКА';el.waveClock.textContent=String(timing.remaining).padStart(2,'0')+' с';el.waveDesc.textContent=`Следующая волна: ${timing.wave+1}`;total=43;}
     else {el.waveTitle.textContent=`☾ НОЧЬ · ВОЛНА ${timing.wave}`;el.waveClock.textContent=String(timing.remaining).padStart(2,'0')+' с';el.waveDesc.textContent=`Зомби на карте: ${timing.enemies}`;total=42;}
     el.timeBar.style.width=clamp(timing.phase==='waiting'?100:timing.remaining/total*100,0,100)+'%';
-    el.timeBar.style.background=timing.phase==='night'?'#f2ad74':'#79ebbe';
+    el.timeBar.style.background=timing.paused?'#8aa6a0':timing.phase==='night'?'#f2ad74':'#79ebbe';
     if(!c){el.missionTitle.textContent='Основать собственную базу';el.missionDesc.textContent='Нажмите 2 и разместите маяк в свободной зоне — не ближе 1260 единиц к чужим базам. Ночью зомби атакуют каждый маяк.';}
     else if(!state.buildings.some(b=>b.type==='turret'&&b.baseId===c.id)){el.missionTitle.textContent='Постройте турель';el.missionDesc.textContent='Соберите древесину и камень, затем нажмите 4. Турель будет защищать маяк автоматически.';}
     else if(!state.buildings.some(b=>b.type==='mine'&&b.baseId===c.id)){el.missionTitle.textContent='Создайте генератор';el.missionDesc.textContent='Нажмите 5, чтобы построить генератор золота. Оно пригодится для улучшений.';}
     else{el.missionTitle.textContent=timing.phase==='night'?'Защитите Маяк!':'Укрепите оборону';el.missionDesc.textContent=timing.phase==='night'?'Уничтожайте зомби и чините повреждённые стены (F).':'Стройте стены и ловушки. Наведите мышь на постройку и нажмите E для улучшения.';}
     if(timing.phase==='night'&&state.enemies.some(e=>e.kind==='boss'&&e.baseId===timing.id)){el.waveDesc.textContent='⚠ БОСС В МИРЕ · Защитите маяк!';}
-    if(timing.phase==='night')document.querySelector('.wave-panel').style.borderColor='#ffb37c66';else document.querySelector('.wave-panel').style.borderColor='var(--line)';
+    if(timing.phase==='night'&&!timing.paused)document.querySelector('.wave-panel').style.borderColor='#ffb37c66';else document.querySelector('.wave-panel').style.borderColor='var(--line)';
     // One glance at the sector monitor shows each settlement's independent wave.
     el.baseList.replaceChildren(...(state.bases||[]).map(b=>{
       const row=document.createElement('div');row.className='base-row'+(b.id===timing.id?' active':'');
       const label=document.createElement('span');label.textContent=(b.canManage?'◆ ':'◇ ')+(b.ownerName||'База').slice(0,14);
-      const status=document.createElement('b');status.textContent=b.phase==='night'?`☾ ${b.wave} · ${b.enemies} зомби`:`☀ ${b.remaining} с`;
+      const status=document.createElement('b');status.textContent=b.paused?'⏸ Пауза':b.phase==='night'?`☾ ${b.wave} · ${b.enemies} зомби`:`☀ ${b.remaining} с`;
       row.append(label,status);return row;
     }));
     el.score.replaceChildren(...state.players.slice().sort((a,b)=>b.score-a.score).slice(0,5).map((p,i)=>{
