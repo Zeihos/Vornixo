@@ -632,7 +632,11 @@ function createGame({records=[],world=null}={}) {
 
 function makeSocket(socket,onMessage,onClose,{idleTimeoutMs=SOCKET_IDLE_TIMEOUT_MS}={}){
   let buffer=Buffer.alloc(0),closed=false,rateTokens=MESSAGE_BURST,lastRate=Date.now();
-  function finish(){if(closed)return;closed=true;onClose();}
+  let lastInboundAt=Date.now();
+  // Socket.setTimeout counts outgoing writes as activity on some Node versions,
+  // so periodic state broadcasts could keep a dead client alive indefinitely.
+  let idleMonitor=null;
+  function finish(){if(closed)return;closed=true;if(idleMonitor)clearInterval(idleMonitor);onClose();}
   function abort(){if(!socket.destroyed)socket.destroy();finish();}
   function sendFrame(op,body){
     if(closed||socket.destroyed)return false;
@@ -650,11 +654,13 @@ function makeSocket(socket,onMessage,onClose,{idleTimeoutMs=SOCKET_IDLE_TIMEOUT_
   }};
   socket.setNoDelay(true);
   socket.setKeepAlive(true,30000);
-  // A dead TCP peer can otherwise reserve a player slot and lock a profile indefinitely.
-  // The timer is reset by received bytes; an idle browser reconnects with its saved session.
-  socket.setTimeout(idleTimeoutMs,abort);
+  // Only inbound traffic extends the deadline, regardless of outgoing state updates.
+  const watchdogEvery=Math.max(100,Math.min(1000,Math.floor(idleTimeoutMs/2)));
+  idleMonitor=setInterval(()=>{if(Date.now()-lastInboundAt>=idleTimeoutMs)abort();},watchdogEvery);
+  idleMonitor.unref();
   socket.on('data',chunk=>{
     if(closed)return;
+    lastInboundAt=Date.now();
     // Ignore clients that stream unbounded data without valid WebSocket frames.
     if(buffer.length+chunk.length>MAX_CLIENT_MESSAGE*2+32){abort();return;}
     buffer=Buffer.concat([buffer,chunk]);
