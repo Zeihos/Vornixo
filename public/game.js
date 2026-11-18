@@ -26,6 +26,8 @@
     {id:'flame',title:'Огнемёт',desc:'75 дерева, 90 камня, 55 золота. Поджигает врагов рядом; периодический урон'},
   ];
   let state=null,playerId=null,ws=null,connected=false,started=false,lastMsgId=0;
+  const RECONNECT_DELAYS_MS=[1000,2000,4000,8000,12000];
+  let reconnectTimer=null,reconnectAttempts=0,reconnectEnabled=false;
   let craftingOpen=false,teamOpen=false,researchOpen=false,settingsOpen=false,buildOpen=false,achievementsOpen=false,baseStatsOpen=false,weaponMode='bow';
   const defaults={map:true,effects:true,details:true,smooth:true};
   let settings={...defaults};
@@ -103,7 +105,33 @@
     el.btn.innerHTML=(isGuest?'НАЧАТЬ ВЫЖИВАНИЕ':isRegister?'СОЗДАТЬ АККАУНТ':mode==='login'?'ВОЙТИ В ИГРУ':'ВОССТАНОВИТЬ ДОСТУП')+' <span>➜</span>';
     el.hint.textContent='Сервер готов к подключению';
   }
-  document.querySelectorAll('[data-auth]').forEach(b=>b.addEventListener('click',()=>setMode(b.dataset.auth)));
+  function cancelReconnect(){
+    if(reconnectTimer!==null)clearTimeout(reconnectTimer);
+    reconnectTimer=null;reconnectAttempts=0;reconnectEnabled=false;
+  }
+  function canReconnect(){
+    return !!(localGet('vornixo_profile_v1')||
+      (localGet('vornixo_account_username')&&localGet('vornixo_account_session')));
+  }
+  function scheduleReconnect(){
+    if(!reconnectEnabled||intentionalExit||reconnectTimer!==null)return;
+    if(reconnectAttempts>=RECONNECT_DELAYS_MS.length){
+      reconnectEnabled=false;
+      el.hint.textContent='Не удалось восстановить соединение. Нажмите «Начать», чтобы попробовать вручную.';
+      return;
+    }
+    const attempt=++reconnectAttempts,delay=RECONNECT_DELAYS_MS[attempt-1];
+    el.hint.textContent=`Соединение потеряно. Переподключение ${attempt}/${RECONNECT_DELAYS_MS.length} через ${Math.round(delay/1000)} с…`;
+    el.btn.disabled=false;el.btn.textContent='ПОДКЛЮЧИТЬСЯ СЕЙЧАС';
+    reconnectTimer=setTimeout(()=>{
+      reconnectTimer=null;
+      if(!reconnectEnabled||intentionalExit)return;
+      start();
+    },delay);
+  }
+  document.querySelectorAll('[data-auth]').forEach(b=>b.addEventListener('click',()=>{
+    cancelReconnect();setMode(b.dataset.auth);
+  }));
   const storedAccount=localGet('vornixo_account_username');
   if(storedAccount){auth.accountName.value=storedAccount;setMode('login');}else setMode('guest');
   function authPayload(){
@@ -130,9 +158,12 @@
     if(ws&&ws.readyState===WebSocket.CONNECTING)return;
     intentionalExit=false;
     ws=new WebSocket(`${location.protocol==='https:'?'wss':'ws'}://${location.host}/ws`);
-    ws.addEventListener('open',()=>send(payload));
-    ws.addEventListener('message',ev=>{let msg;try{msg=JSON.parse(ev.data);}catch{return;}
+    const connection=ws; // Ignore late events from an older attempt.
+    ws.addEventListener('open',()=>{if(ws===connection)send(payload);});
+    ws.addEventListener('message',ev=>{if(ws!==connection)return;let msg;try{msg=JSON.parse(ev.data);}catch{return;}
       if(msg.type==='welcome'){
+        const wasReconnecting=reconnectEnabled;
+        cancelReconnect();
         playerId=msg.id;started=true;connected=true;accountUsername=msg.username||null;
         if(msg.token)localSet('vornixo_profile_v1',msg.token);
         if(msg.session){localSet('vornixo_account_session',msg.session);localSet('vornixo_account_username',msg.username);localRemove('vornixo_profile_v1');}
@@ -141,9 +172,10 @@
         auth.passwordSettings.classList.toggle('hidden',!accountUsername);
         el.saveState.textContent=msg.restored?'● Профиль восстановлен':'● Автосохранение включено';el.start.classList.add('hidden');el.ui.classList.remove('hidden');
         el.serverState.textContent='СЕРВЕР ONLINE';el.btn.disabled=false;el.btn.innerHTML='НАЧАТЬ ВЫЖИВАНИЕ <span>➜</span>';
-        toast(msg.restored?'Прогресс загружен!':'Добро пожаловать в VORNIXO! Нажмите H для управления.');
+        toast(wasReconnecting?'Соединение восстановлено!':msg.restored?'Прогресс загружен!':'Добро пожаловать в VORNIXO! Нажмите H для управления.');
         if(msg.recoveryCode){auth.newCode.textContent=msg.recoveryCode;auth.dialog.classList.remove('hidden');}
       }else if(msg.type==='auth_error'){
+        if(reconnectEnabled)cancelReconnect(); // Invalid/expired credentials require manual action.
         el.hint.textContent=String(msg.text||'Ошибка входа');el.btn.disabled=false;el.btn.innerHTML='ПОПРОБОВАТЬ ЕЩЁ <span>➜</span>';
         toast(el.hint.textContent);
       }else if(msg.type==='account_session'){
@@ -155,18 +187,23 @@
       else if(msg.type==='team_chat')appendChat({name:'[ОТРЯД] '+msg.name,text:msg.text,private:true});
     });
     ws.addEventListener('close',()=>{
+      if(ws!==connection)return;
+      const shouldRetry=!intentionalExit&&(started||reconnectEnabled)&&canReconnect();
       el.ping.textContent='· — мс';toggleCraft(false);toggleTeam(false);toggleResearch(false);toggleSettings(false);closeExtras();
-      connected=false;state=null;started=false;playerId=null;accountUsername=null;floaters.length=0;hitFlash.clear();motionUntil.clear();cameraKick=0;
+      connected=false;state=null;started=false;playerId=null;accountUsername=null;lastMsgId=0;
+      floaters.length=0;hitFlash.clear();motionUntil.clear();cameraKick=0;mouseDown=false;autoAttack=false;
+      for(const key in keys)keys[key]=false;el.chat.replaceChildren();
       el.start.classList.remove('hidden');el.ui.classList.add('hidden');el.btn.disabled=false;
       setMode(localGet('vornixo_account_username')?'login':'guest');
-      if(!intentionalExit)el.hint.textContent='Соединение закрыто. Проверьте сервер или данные для входа.';
+      if(shouldRetry){reconnectEnabled=true;scheduleReconnect();}
+      else if(!intentionalExit)el.hint.textContent='Соединение закрыто. Проверьте сервер или данные для входа.';
       else el.hint.textContent='Вы вышли из игры.';
     });
-    ws.addEventListener('error',()=>{el.hint.textContent='Не удалось подключиться. Убедитесь, что сервер работает.';el.btn.disabled=false;});
+    ws.addEventListener('error',()=>{if(ws!==connection)return;el.hint.textContent='Не удалось подключиться. Убедитесь, что сервер работает.';el.btn.disabled=false;});
   }
   $('copyRecovery').addEventListener('click',async()=>{try{await navigator.clipboard.writeText(auth.newCode.textContent);$('copyRecovery').textContent='СКОПИРОВАНО';}catch{toast('Выделите и скопируйте код вручную.');}});
   $('closeRecovery').addEventListener('click',()=>auth.dialog.classList.add('hidden'));
-  $('logoutButton').addEventListener('click',()=>{if(!ws)return;intentionalExit=true;localRemove('vornixo_account_session');ws.close();});
+  $('logoutButton').addEventListener('click',()=>{if(!ws)return;cancelReconnect();intentionalExit=true;localRemove('vornixo_account_session');ws.close();});
   $('changePassword').addEventListener('click',()=>{
     const oldPassword=$('oldPassword').value,newPassword=$('newPassword').value;
     if(newPassword.length<10)return toast('Новый пароль должен быть от 10 символов');
@@ -174,7 +211,8 @@
   });
   el.pulse.addEventListener('click',()=>send({type:'act',action:'pulse'}));
   el.dash.addEventListener('click',()=>send({type:'act',action:'dash'}));
-  el.btn.addEventListener('click',start);[el.name,auth.accountName,auth.password,auth.recoveryCode].forEach(input=>input.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();start();}}));
+  const manualStart=()=>{cancelReconnect();start();};
+  el.btn.addEventListener('click',manualStart);[el.name,auth.accountName,auth.password,auth.recoveryCode].forEach(input=>input.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();manualStart();}}));
   function chatting(){return document.activeElement===el.chatInput;}
   function closeChat(){el.chatComposer.classList.add('hidden');el.chatPrompt.classList.remove('hidden');el.chatInput.blur();}
   function openChat(){if(!started)return;el.chatComposer.classList.remove('hidden');el.chatPrompt.classList.add('hidden');for(const k in keys)keys[k]=false;el.chatInput.focus();}
