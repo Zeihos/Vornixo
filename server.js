@@ -13,7 +13,8 @@ const MAX_PLAYERS = 16;
 const MAX_CLIENT_MESSAGE = 8192, MAX_SOCKET_BACKLOG = 1024 * 1024;
 const MAX_MESSAGES_PER_SEC = 50, MESSAGE_BURST = 100;
 const LOGIN_TIMEOUT_MS = 30000, MAX_CONNECTIONS_PER_IP = 4;
-const VERSION='0.15.0', PULSE_COOLDOWN=16, PULSE_COST=10, DASH_COOLDOWN=8, DASH_DISTANCE=175;
+const SOCKET_IDLE_TIMEOUT_MS = 25000; // Client sends input ~18 times/s or a ping every 5s.
+const VERSION='0.16.0', PULSE_COOLDOWN=16, PULSE_COST=10, DASH_COOLDOWN=8, DASH_DISTANCE=175;
 const MAX_BASES=5, BASE_RADIUS=610, BASE_SPACING=1260, MAX_BUILDINGS_PER_BASE=65;
 const MAX_WAVE_SPAWNS=36, WAVE_WARNING_SECONDS=10;
 const CRAFTS=Object.freeze({
@@ -629,7 +630,7 @@ function createGame({records=[],world=null}={}) {
   return {g,addPlayer,removePlayer,update,snapshot,action,announce,updateRecords,exportWorld,exportProfile};
 }
 
-function makeSocket(socket,onMessage,onClose){
+function makeSocket(socket,onMessage,onClose,{idleTimeoutMs=SOCKET_IDLE_TIMEOUT_MS}={}){
   let buffer=Buffer.alloc(0),closed=false,rateTokens=MESSAGE_BURST,lastRate=Date.now();
   function finish(){if(closed)return;closed=true;onClose();}
   function abort(){if(!socket.destroyed)socket.destroy();finish();}
@@ -649,6 +650,9 @@ function makeSocket(socket,onMessage,onClose){
   }};
   socket.setNoDelay(true);
   socket.setKeepAlive(true,30000);
+  // A dead TCP peer can otherwise reserve a player slot and lock a profile indefinitely.
+  // The timer is reset by received bytes; an idle browser reconnects with its saved session.
+  socket.setTimeout(idleTimeoutMs,abort);
   socket.on('data',chunk=>{
     if(closed)return;
     // Ignore clients that stream unbounded data without valid WebSocket frames.
@@ -680,7 +684,7 @@ function makeSocket(socket,onMessage,onClose){
   return client;
 }
 
-function startServer({port=PORT,host=HOST,dataFile=path.join(__dirname,'data','records.json'),worldFile=path.join(path.dirname(dataFile),'world.json'),profilesFile=path.join(path.dirname(dataFile),'profiles.json'),teamsFile=path.join(path.dirname(dataFile),'teams.json'),accountsFile=path.join(path.dirname(dataFile),'accounts.json')}={}){
+function startServer({port=PORT,host=HOST,idleTimeoutMs=SOCKET_IDLE_TIMEOUT_MS,dataFile=path.join(__dirname,'data','records.json'),worldFile=path.join(path.dirname(dataFile),'world.json'),profilesFile=path.join(path.dirname(dataFile),'profiles.json'),teamsFile=path.join(path.dirname(dataFile),'teams.json'),accountsFile=path.join(path.dirname(dataFile),'accounts.json')}={}){
   let records=[];
   try{const loaded=JSON.parse(fs.readFileSync(dataFile,'utf8'));if(Array.isArray(loaded))records=loaded;}catch(e){if(e.code!=='ENOENT')console.warn('Невозможно прочитать рекорды:',e.message);}
   function readJson(file,fallback){
@@ -949,7 +953,7 @@ function startServer({port=PORT,host=HOST,dataFile=path.join(__dirname,'data','r
         const txt=String(msg.text||'').replace(/[<>\u0000-\u001f]/g,'').trim().slice(0,110);
         if(txt && Date.now()/1000-(p.lastChat||0)>1.2){p.lastChat=Date.now()/1000;game.g.chat.push({id:game.g.nextId++,name:p.name,text:txt,time:Date.now()});game.g.chat=game.g.chat.slice(-16);}
       }
-    },()=>{if(!didClose){didClose=true;clearTimeout(loginTimer);peers.delete(peer);if(p){if(p.profileKey){profiles.set(p.profileKey,game.exportProfile(p));activeProfiles.delete(p.profileKey);}game.removePlayer(p.id);}}});
+    },()=>{if(!didClose){didClose=true;clearTimeout(loginTimer);peers.delete(peer);if(p){if(p.profileKey){profiles.set(p.profileKey,game.exportProfile(p));activeProfiles.delete(p.profileKey);}game.removePlayer(p.id);}}},{idleTimeoutMs});
     peer.ip=ip;
     peers.add(peer);
     loginTimer=setTimeout(()=>{if(!p)peer.close();},LOGIN_TIMEOUT_MS);
