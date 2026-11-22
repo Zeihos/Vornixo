@@ -1,6 +1,6 @@
 {
   "name": "vornixo",
-  "version": "0.20.0",
+  "version": "0.21.0",
   "private": true,
   "description": "Multiplayer browser-based survival and base defense",
   "main": "server.js",
@@ -13,7 +13,8 @@
     "bench:smoke": "node --test tests/performance.test.cjs",
     "soak:smoke": "node --test tests/endurance.test.cjs",
     "test:multibase": "node --test tests/multibase.test.cjs",
-    "test:wave-budget": "node --test tests/wave-budget.test.cjs"
+    "test:wave-budget": "node --test tests/wave-budget.test.cjs",
+    "test:combat": "node --test tests/combat-fairness.test.cjs"
   },
   "engines": {
     "node": ">=22"

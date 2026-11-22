@@ -26,7 +26,7 @@ function readyForState(peer,nowMs,metrics){
 const MAX_MESSAGES_PER_SEC = 50, MESSAGE_BURST = 100;
 const LOGIN_TIMEOUT_MS = 30000, MAX_CONNECTIONS_PER_IP = 4;
 const SOCKET_IDLE_TIMEOUT_MS = 25000; // Client sends input ~18 times/s or a ping every 5s.
-const VERSION='0.20.0', PULSE_COOLDOWN=16, PULSE_COST=10, DASH_COOLDOWN=8, DASH_DISTANCE=175;
+const VERSION='0.21.0', PULSE_COOLDOWN=16, PULSE_COST=10, DASH_COOLDOWN=8, DASH_DISTANCE=175;
 const MAX_BASES=5, BASE_RADIUS=610, BASE_SPACING=1260, MAX_BUILDINGS_PER_BASE=65;
 const MAX_WAVE_SPAWNS=36, WAVE_WARNING_SECONDS=10;
 const MAX_WORLD_ENEMIES=160, MAX_BASE_ENEMIES=32;
@@ -227,6 +227,13 @@ function createGame({records=[],world=null}={}) {
     const base=coreFor(building);
     for(const p of g.players.values())if(canManage(p,base)){p.gold+=3;p.score+=12;}
   }
+  // Offline settlements have paused waves: their frozen enemies must not be
+  // exploited for combat rewards by travellers from another settlement.
+  function enemyCanBeAttacked(enemy){
+    if(enemy.hp<=0)return false;
+    const base=cores().find(c=>c.id===(enemy.baseId||g.core?.id));
+    return !!base&&[...g.players.values()].some(p=>canManage(p,base));
+  }
   function send(p,msg) {if(p.socket && !p.socket.closed) p.socket.sendJSON(msg);}
   function charge(p,r,scale=1){return p.wood >=Math.ceil(r.wood*scale) && p.stone>=Math.ceil(r.stone*scale) && p.gold>=Math.ceil(r.gold*scale);}
   function pay(p,r,scale=1){p.wood-=Math.ceil(r.wood*scale);p.stone-=Math.ceil(r.stone*scale);p.gold-=Math.ceil(r.gold*scale);}
@@ -299,7 +306,7 @@ function createGame({records=[],world=null}={}) {
   function swing(p, pos, now){
     if(now-p.lastSwing<0.34 || !p.alive)return;
     p.lastSwing=now;
-    let target=g.enemies.filter(e=>distance(p,e)<108&&distance(e,pos)<78).sort((a,b)=>distance(a,pos)-distance(b,pos))[0];
+    let target=g.enemies.filter(e=>enemyCanBeAttacked(e)&&distance(p,e)<108&&distance(e,pos)<78).sort((a,b)=>distance(a,pos)-distance(b,pos))[0];
     if(target){target.hp-=(target.kind==='tank'?.58:1)*(31+9*p.skills.power); if(target.hp<=0){recordKill(target);g.enemies=g.enemies.filter(e=>e.id!==target.id);p.kills++;p.score+=25;p.gold+=7;checkAchievements(p);}return;}
     const node=g.resources.filter(n=>n.hp>0&&distance(p,n)<115&&distance(n,pos)<75).sort((a,b)=>distance(a,pos)-distance(b,pos))[0];
     if(node){node.hp--;g.resourceRevision++; const tech=bestBase(p)?.tech?.harvest||0,scale=1+.2*tech,biome=biomeAt(node.x,node.y);
@@ -329,7 +336,7 @@ function createGame({records=[],world=null}={}) {
       if(distance(p,pos)>360)return fail(p,'Цель слишком далеко');
       p.inventory.flare--;
       let affected=0;
-      for(const e of g.enemies)if(distance(e,pos)<230){e.slowUntil=Math.max(e.slowUntil,Date.now()/1000+5);affected++;}
+      for(const e of g.enemies)if(enemyCanBeAttacked(e)&&distance(e,pos)<230){e.slowUntil=Math.max(e.slowUntil,Date.now()/1000+5);affected++;}
       g.bullets.push({id:nextId(),x:p.x,y:p.y,tx:pos.x,ty:pos.y,kind:'flare',until:Date.now()/1000+.45});
       return send(p,{type:'toast',text:`Граната: замедлено зомби — ${affected}`});
     }
@@ -344,7 +351,7 @@ function createGame({records=[],world=null}={}) {
   }
   function shoot(p,pos,now){
     if(now-p.lastShot<.72)return;
-    const target=g.enemies.filter(e=>distance(p,e)<=520 && distance(e,pos)<70)
+    const target=g.enemies.filter(e=>enemyCanBeAttacked(e)&&distance(p,e)<=520 && distance(e,pos)<70)
       .sort((a,b)=>distance(a,pos)-distance(b,pos))[0];
     if(!target)return;
     if(p.inventory.bolts<1&&p.wood<1)return fail(p,'Нужен болт или 1 древесина');
@@ -358,6 +365,7 @@ function createGame({records=[],world=null}={}) {
     if(p.inventory.shells<1)return fail(p,'Нет патронов. Создайте их в мастерской (I)');
     const aim=Math.atan2(pos.y-p.y,pos.x-p.x), range=330, cone=.29;
     const targets=g.enemies.filter(e=>{
+      if(!enemyCanBeAttacked(e))return false;
       const d=distance(p,e);if(d>range||d<1)return false;
       return Math.abs(Math.atan2(Math.sin(Math.atan2(e.y-p.y,e.x-p.x)-aim),Math.cos(Math.atan2(e.y-p.y,e.x-p.x)-aim)))<=cone;
     }).sort((a,b)=>distance(p,a)-distance(p,b)).slice(0,4);
@@ -399,7 +407,7 @@ function createGame({records=[],world=null}={}) {
     if(p.gold<PULSE_COST)return fail(p,'Для импульса нужно 10 золота');
     p.gold-=PULSE_COST;p.lastPulse=now;p.pulseUntil=now+.4;
     const defeated=new Set();
-    for(const e of g.enemies){if(distance(p,e)>220)continue;
+    for(const e of g.enemies){if(!enemyCanBeAttacked(e)||distance(p,e)>220)continue;
       e.hp-=(e.kind==='tank'?.58:1)*(65+p.skills.power*18);
       const a=Math.atan2(e.y-p.y,e.x-p.x);e.x=clamp(e.x+Math.cos(a)*58,20,WORLD.width-20);e.y=clamp(e.y+Math.sin(a)*58,20,WORLD.height-20);
       if(e.hp<=0){recordKill(e);defeated.add(e.id);p.kills++;p.score+=e.kind==='boss'?300:35;p.gold+=e.kind==='boss'?85:8;}}
@@ -570,6 +578,7 @@ function createGame({records=[],world=null}={}) {
           for(const e of targets){
             e.hp-=(11+6*b.level)*(1+.15*(coreFor(b)?.tech?.power||0))*(e.kind==='tank'?.8:1);
             e.burnUntil=Math.max(e.burnUntil||0,now+2.5);
+            e.burnSourceBaseId=b.baseId; // transient kill credit; burn timers are not persisted
             e.lastBurn=now;
             g.bullets.push({id:nextId(),baseId:b.baseId,x:b.x,y:b.y,tx:e.x,ty:e.y,kind:'flame',until:now+.28});
             rewardDefenseKill(b,e);
@@ -577,14 +586,23 @@ function createGame({records=[],world=null}={}) {
         }
       }
       if(b.type==='spike'&&now-b.lastSpikes>.45){
-        for(const e of g.enemies)if(e.hp>0&&enemyForBase(e,coreFor(b))&&distance(b,e)<58){e.hp-=7*b.level;}
+        for(const e of g.enemies)if(e.hp>0&&enemyForBase(e,coreFor(b))&&distance(b,e)<58){
+          e.hp-=7*b.level;
+          rewardDefenseKill(b,e);
+        }
         b.lastSpikes=now;
       }
     }
     // DoT and shaman support are authoritative and restricted to the enemy's assigned base.
     for(const e of g.enemies){
       if(pausedBases.has(e.baseId))continue;
-      if(e.burnUntil>now&&now-(e.lastBurn||0)>=.5){e.hp-=7;e.lastBurn=now;}
+      if(e.burnUntil>now&&now-(e.lastBurn||0)>=.5){
+        e.hp-=7;e.lastBurn=now;
+        if(e.hp<=0&&e.burnSourceBaseId===e.baseId){
+          const source=cores().find(c=>c.id===e.burnSourceBaseId);
+          if(source)rewardDefenseKill(source,e);
+        }
+      }
       if(e.kind==='shaman'&&e.hp>0&&now-(e.lastHeal||0)>=2.1){
         const allies=g.enemies.filter(a=>a.id!==e.id&&a.baseId===e.baseId&&a.hp>0&&a.hp<a.maxHp&&distance(a,e)<180).slice(0,5);
         e.lastHeal=now;
