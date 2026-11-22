@@ -26,7 +26,7 @@ function readyForState(peer,nowMs,metrics){
 const MAX_MESSAGES_PER_SEC = 50, MESSAGE_BURST = 100;
 const LOGIN_TIMEOUT_MS = 30000, MAX_CONNECTIONS_PER_IP = 4;
 const SOCKET_IDLE_TIMEOUT_MS = 25000; // Client sends input ~18 times/s or a ping every 5s.
-const VERSION='0.18.0', PULSE_COOLDOWN=16, PULSE_COST=10, DASH_COOLDOWN=8, DASH_DISTANCE=175;
+const VERSION='0.19.0', PULSE_COOLDOWN=16, PULSE_COST=10, DASH_COOLDOWN=8, DASH_DISTANCE=175;
 const MAX_BASES=5, BASE_RADIUS=610, BASE_SPACING=1260, MAX_BUILDINGS_PER_BASE=65;
 const MAX_WAVE_SPAWNS=36, WAVE_WARNING_SECONDS=10;
 const CRAFTS=Object.freeze({
@@ -218,6 +218,13 @@ function createGame({records=[],world=null}={}) {
   function recordKill(e){
     if(e._counted)return; e._counted=true;
     const base=cores().find(c=>c.id===e.baseId);if(base){base.stats ||= defaultBaseStats();base.stats.zombiesDefeated++;}
+  }
+  // Multiple towers may strike the same enemy in one tick. Award a kill only once.
+  function rewardDefenseKill(building,enemy){
+    if(enemy.hp>0||enemy._counted)return;
+    recordKill(enemy);
+    const base=coreFor(building);
+    for(const p of g.players.values())if(canManage(p,base)){p.gold+=3;p.score+=12;}
   }
   function send(p,msg) {if(p.socket && !p.socket.closed) p.socket.sendJSON(msg);}
   function charge(p,r,scale=1){return p.wood >=Math.ceil(r.wood*scale) && p.stone>=Math.ceil(r.stone*scale) && p.gold>=Math.ceil(r.gold*scale);}
@@ -497,9 +504,9 @@ function createGame({records=[],world=null}={}) {
     for(const b of g.buildings){
       if(pausedBases.has(b.baseId))continue;
       if(b.type==='turret' && now-b.lastShot>Math.max(.36,.90-b.level*.12)){
-        const target=g.enemies.filter(e=>enemyForBase(e,coreFor(b))&&distance(b,e)<305+b.level*42).sort((a,c)=>distance(a,b)-distance(c,b))[0];
+        const target=g.enemies.filter(e=>e.hp>0&&enemyForBase(e,coreFor(b))&&distance(b,e)<305+b.level*42).sort((a,c)=>distance(a,b)-distance(c,b))[0];
         if(target){target.hp-=(target.kind==='tank'?.58:1)*22*b.level*(1+.15*(coreFor(b)?.tech?.power||0));b.lastShot=now;g.bullets.push({id:nextId(),x:b.x,y:b.y,tx:target.x,ty:target.y,kind:'turret',until:now+.22});
-          if(target.hp<=0){recordKill(target);g.enemies=g.enemies.filter(e=>e.id!==target.id);for(const p of g.players.values())if(canManage(p,coreFor(b))){p.gold+=3;p.score+=12;}}
+          rewardDefenseKill(b,target);
         }
       }
       if(b.type==='medic'&&now-b.lastShot>=2){
@@ -507,47 +514,47 @@ function createGame({records=[],world=null}={}) {
         b.lastShot=now;
       }
       if(b.type==='frost'&&now-b.lastShot>=1.5){
-        for(const e of g.enemies)if(enemyForBase(e,coreFor(b))&&distance(b,e)<230+b.level*30)e.slowUntil=now+2.2;
+        for(const e of g.enemies)if(e.hp>0&&enemyForBase(e,coreFor(b))&&distance(b,e)<230+b.level*30)e.slowUntil=now+2.2;
         b.lastShot=now;
       }
       if(b.type==='tesla'&&now-b.lastShot>=Math.max(.5,1.8-b.level*.22)){
-        const targets=g.enemies.filter(e=>enemyForBase(e,coreFor(b))&&distance(b,e)<240+b.level*40)
+        const targets=g.enemies.filter(e=>e.hp>0&&enemyForBase(e,coreFor(b))&&distance(b,e)<240+b.level*40)
           .sort((a,c)=>distance(a,b)-distance(c,b)).slice(0,2+b.level);
         if(targets.length){b.lastShot=now;
           for(const target of targets){target.hp-=(target.kind==='tank'?.8:1)*(20+11*b.level)*(1+.15*(coreFor(b)?.tech?.power||0));
             g.bullets.push({id:nextId(),baseId:b.baseId,x:b.x,y:b.y,tx:target.x,ty:target.y,kind:'tesla',until:now+.24});
-            if(target.hp<=0)for(const p of g.players.values())if(canManage(p,coreFor(b))){p.gold+=3;p.score+=12;}
+            rewardDefenseKill(b,target);
           }
         }
       }
       if(b.type==='mortar'&&now-b.lastShot>=Math.max(1.6,3.2-.4*b.level)){
-        const candidates=g.enemies.filter(e=>enemyForBase(e,coreFor(b))&&distance(b,e)<440+35*b.level)
+        const candidates=g.enemies.filter(e=>e.hp>0&&enemyForBase(e,coreFor(b))&&distance(b,e)<440+35*b.level)
           .sort((a,c)=>distance(a,b)-distance(c,b));
         if(candidates.length){
           const center=candidates[0], radius=90+b.level*12;
           const damage=(34+20*b.level)*(1+.15*(coreFor(b)?.tech?.power||0));
           b.lastShot=now;
           g.bullets.push({id:nextId(),baseId:b.baseId,x:b.x,y:b.y,tx:center.x,ty:center.y,kind:'mortar',until:now+.38});
-          for(const e of g.enemies)if(enemyForBase(e,coreFor(b))&&distance(e,center)<=radius){
+          for(const e of g.enemies)if(e.hp>0&&enemyForBase(e,coreFor(b))&&distance(e,center)<=radius){
             e.hp-=damage*(e.kind==='tank'?.8:1);
-            if(e.hp<=0)for(const p of g.players.values())if(canManage(p,coreFor(b))){p.gold+=3;p.score+=12;}
+            rewardDefenseKill(b,e);
           }
         }
       }
       if(b.type==='flame'&&now-b.lastShot>=Math.max(.45,1.05-b.level*.15)){
-        const targets=g.enemies.filter(e=>enemyForBase(e,coreFor(b))&&distance(b,e)<155+b.level*23).slice(0,9);
+        const targets=g.enemies.filter(e=>e.hp>0&&enemyForBase(e,coreFor(b))&&distance(b,e)<155+b.level*23).slice(0,9);
         if(targets.length){b.lastShot=now;
           for(const e of targets){
             e.hp-=(11+6*b.level)*(1+.15*(coreFor(b)?.tech?.power||0))*(e.kind==='tank'?.8:1);
             e.burnUntil=Math.max(e.burnUntil||0,now+2.5);
             e.lastBurn=now;
             g.bullets.push({id:nextId(),baseId:b.baseId,x:b.x,y:b.y,tx:e.x,ty:e.y,kind:'flame',until:now+.28});
-            if(e.hp<=0)for(const p of g.players.values())if(canManage(p,coreFor(b))){p.gold+=3;p.score+=12;}
+            rewardDefenseKill(b,e);
           }
         }
       }
       if(b.type==='spike'&&now-b.lastSpikes>.45){
-        for(const e of g.enemies)if(enemyForBase(e,coreFor(b))&&distance(b,e)<58){e.hp-=7*b.level;}
+        for(const e of g.enemies)if(e.hp>0&&enemyForBase(e,coreFor(b))&&distance(b,e)<58){e.hp-=7*b.level;}
         b.lastSpikes=now;
       }
     }
@@ -574,8 +581,10 @@ function createGame({records=[],world=null}={}) {
       if(pausedBases.has(e.baseId))continue;
       const targetCore=baseById.get(e.baseId||g.core?.id);if(!targetCore)continue;
       const baseBuildings=buildingsByBase.get(targetCore.id)||[];
+      // Combat is confined to the settlement assigned to this enemy.
+      const localPlayers=livePlayers.filter(p=>distance(p,targetCore)<=BASE_RADIUS);
       const nearby=baseBuildings.filter(b=>distance(b,e)<RECIPES[b.type].size/2+39).sort((a,b)=>distance(a,e)-distance(b,e));
-      const nearestPlayer=livePlayers.filter(p=>distance(p,e)<32).sort((a,b)=>distance(a,e)-distance(b,e))[0];
+      const nearestPlayer=localPlayers.filter(p=>distance(p,e)<32).sort((a,b)=>distance(a,e)-distance(b,e))[0];
       if(nearby.length){
         const b=nearby[0];if(now-e.lastAttack>.75){const damage=e.damage*(e.kind==='berserker'&&e.hp<e.maxHp*.5?1.6:1)*(e.kind==='sapper'&&b.type==='wall'?2:1)*(1-.09*(targetCore.tech?.armor||0));b.hp-=damage;targetCore.stats.damageTaken+=Math.round(damage);e.lastAttack=now;}
       }else if(e.kind==='spitter'&&distance(e,targetCore)<255){
@@ -596,7 +605,7 @@ function createGame({records=[],world=null}={}) {
         // Walls between the invader and beacon become meaningful obstacles instead of being bypassed.
         const wall=baseBuildings.filter(b=>b.type==='wall'&&distance(b,e)<170&&
           distance(b,targetCore)<distance(e,targetCore)+45).sort((a,b)=>distance(a,e)-distance(b,e))[0];
-        const player=livePlayers.filter(p=>distance(p,e)<160).sort((a,b)=>distance(a,e)-distance(b,e))[0];
+        const player=localPlayers.filter(p=>distance(p,e)<160).sort((a,b)=>distance(a,e)-distance(b,e))[0];
         const target=priority||wall||player||targetCore;
         const dx=target.x-e.x,dy=target.y-e.y,len=Math.hypot(dx,dy)||1;
         const speed=e.speed*(e.slowUntil>now?.47:1)*(e.kind==='berserker'&&e.hp<e.maxHp*.5?1.75:1);

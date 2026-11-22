@@ -1,6 +1,6 @@
 {
   "name": "vornixo",
-  "version": "0.18.0",
+  "version": "0.19.0",
   "private": true,
   "description": "Multiplayer browser-based survival and base defense",
   "main": "server.js",
@@ -11,7 +11,8 @@
     "build:clean": "node scripts/build-clean.cjs",
     "verify:clean": "node scripts/verify-clean.cjs",
     "bench:smoke": "node --test tests/performance.test.cjs",
-    "soak:smoke": "node --test tests/endurance.test.cjs"
+    "soak:smoke": "node --test tests/endurance.test.cjs",
+    "test:multibase": "node --test tests/multibase.test.cjs"
   },
   "engines": {
     "node": ">=22"
