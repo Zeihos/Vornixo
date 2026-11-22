@@ -26,7 +26,7 @@ function readyForState(peer,nowMs,metrics){
 const MAX_MESSAGES_PER_SEC = 50, MESSAGE_BURST = 100;
 const LOGIN_TIMEOUT_MS = 30000, MAX_CONNECTIONS_PER_IP = 4;
 const SOCKET_IDLE_TIMEOUT_MS = 25000; // Client sends input ~18 times/s or a ping every 5s.
-const VERSION='0.17.0', PULSE_COOLDOWN=16, PULSE_COST=10, DASH_COOLDOWN=8, DASH_DISTANCE=175;
+const VERSION='0.18.0', PULSE_COOLDOWN=16, PULSE_COST=10, DASH_COOLDOWN=8, DASH_DISTANCE=175;
 const MAX_BASES=5, BASE_RADIUS=610, BASE_SPACING=1260, MAX_BUILDINGS_PER_BASE=65;
 const MAX_WAVE_SPAWNS=36, WAVE_WARNING_SECONDS=10;
 const CRAFTS=Object.freeze({
@@ -822,18 +822,38 @@ function startServer({port=PORT,host=HOST,idleTimeoutMs=SOCKET_IDLE_TIMEOUT_MS,d
   const digest=token=>crypto.createHash('sha256').update(token).digest('hex');
   function atomicWrite(file,value){
     fs.mkdirSync(path.dirname(file),{recursive:true});
-    const tmp=file+'.tmp';
+    const tmp=file+'.tmp',backup=file+'.bak',backupTmp=backup+'.tmp';
+    // Both the current save and its previous-valid backup are atomically replaced.
+    // A crash during backup creation must never truncate the last good .bak file.
     fs.writeFileSync(tmp,JSON.stringify(value,null,2)+'\n',{mode:0o600});
-    // Maintain one previous valid JSON version for unexpected crashes or corrupted saves.
-    try{const previous=fs.readFileSync(file,'utf8');JSON.parse(previous);fs.writeFileSync(file+'.bak',previous,{mode:0o600});}
-    catch(e){if(e.code!=='ENOENT')console.warn('Резервная копия не создана:',path.basename(file),e.message);}
+    try{
+      const previous=fs.readFileSync(file,'utf8');
+      JSON.parse(previous);
+      fs.writeFileSync(backupTmp,previous,{mode:0o600});
+      fs.renameSync(backupTmp,backup);
+    }catch(e){
+      if(e.code!=='ENOENT')console.warn('Резервная копия не создана:',path.basename(file),e.message);
+      try{fs.unlinkSync(backupTmp);}catch{}
+    }
     fs.renameSync(tmp,file);
   }
   function saveAll(){
     game.updateRecords();for(const p of game.g.players.values())if(p.profileKey)profiles.set(p.profileKey,game.exportProfile(p));
+    let failed=false;
     for(const [file,value] of [[dataFile,game.g.records],[worldFile,game.exportWorld()],[profilesFile,{schema:1,profiles:Object.fromEntries(profiles)}],[teamsFile,{schema:1,teams:[...teams.values()]}]]){
-      try{atomicWrite(file,value);}catch(e){console.warn('Не удалось сохранить',path.basename(file),e.message);}
+      try{atomicWrite(file,value);}catch(e){failed=true;console.warn('Не удалось сохранить',path.basename(file),e.message);}
     }
+    metrics.saveRuns++;
+    if(failed)metrics.saveFailures++;
+    else metrics.lastSavedAt=Date.now();
+  }
+  // Player departures persist quickly rather than waiting for the 10s autosave.
+  // Coalescing simultaneous disconnects avoids one blocking disk write per player.
+  let disconnectSaveTimer=null,closing=false;
+  function scheduleDisconnectSave(){
+    if(closing||disconnectSaveTimer)return;
+    disconnectSaveTimer=setTimeout(()=>{disconnectSaveTimer=null;saveAll();},250);
+    disconnectSaveTimer.unref();
   }
   function saveRecords(){
     game.updateRecords();
@@ -841,8 +861,8 @@ function startServer({port=PORT,host=HOST,idleTimeoutMs=SOCKET_IDLE_TIMEOUT_MS,d
     catch(e){console.warn('Не удалось сохранить рекорды:',e.message);}
   }
   const metrics={startedAt:Date.now(),ticks:0,tickAvgMs:0,tickPeakMs:0,
-    broadcasts:0,broadcastAvgMs:0,snapshotsSent:0,stateBytes:0,
-    skippedBackpressure:0,slowDisconnects:0};
+    tickOverruns:0,broadcasts:0,broadcastAvgMs:0,snapshotsSent:0,stateBytes:0,
+    skippedBackpressure:0,slowDisconnects:0,saveRuns:0,saveFailures:0,lastSavedAt:null};
   const peers=new Set();const publicDir=path.join(__dirname,'public');
   const mime={'.html':'text/html; charset=utf-8','.css':'text/css; charset=utf-8','.js':'application/javascript; charset=utf-8','.svg':'image/svg+xml','.png':'image/png'};
   const server=http.createServer((req,res)=>{
@@ -864,7 +884,9 @@ function startServer({port=PORT,host=HOST,idleTimeoutMs=SOCKET_IDLE_TIMEOUT_MS,d
         broadcasts:metrics.broadcasts,
         broadcastAvgMs:+metrics.broadcastAvgMs.toFixed(2),
         snapshotsSent:metrics.snapshotsSent,stateBytes:metrics.stateBytes,
-        skippedBackpressure:metrics.skippedBackpressure,slowDisconnects:metrics.slowDisconnects
+        skippedBackpressure:metrics.skippedBackpressure,slowDisconnects:metrics.slowDisconnects,
+        tickOverruns:metrics.tickOverruns,saveRuns:metrics.saveRuns,
+        saveFailures:metrics.saveFailures,lastSavedAt:metrics.lastSavedAt
       };
       res.end(JSON.stringify({name:'VORNIXO',version:VERSION,players:game.g.players.size,
         maxPlayers:MAX_PLAYERS,wave:game.g.wave,phase:game.g.phase,
@@ -1001,7 +1023,7 @@ function startServer({port=PORT,host=HOST,idleTimeoutMs=SOCKET_IDLE_TIMEOUT_MS,d
         const txt=String(msg.text||'').replace(/[<>\u0000-\u001f]/g,'').trim().slice(0,110);
         if(txt && Date.now()/1000-(p.lastChat||0)>1.2){p.lastChat=Date.now()/1000;game.g.chat.push({id:game.g.nextId++,name:p.name,text:txt,time:Date.now()});game.g.chat=game.g.chat.slice(-16);}
       }
-    },()=>{if(!didClose){didClose=true;clearTimeout(loginTimer);peers.delete(peer);if(p){if(p.profileKey){profiles.set(p.profileKey,game.exportProfile(p));activeProfiles.delete(p.profileKey);}game.removePlayer(p.id);}}},{idleTimeoutMs});
+    },()=>{if(!didClose){didClose=true;clearTimeout(loginTimer);peers.delete(peer);if(p){if(p.profileKey){profiles.set(p.profileKey,game.exportProfile(p));activeProfiles.delete(p.profileKey);}game.removePlayer(p.id);scheduleDisconnectSave();}}},{idleTimeoutMs});
     peer.ip=ip;
     peers.add(peer);
     loginTimer=setTimeout(()=>{if(!p)peer.close();},LOGIN_TIMEOUT_MS);
@@ -1009,7 +1031,9 @@ function startServer({port=PORT,host=HOST,idleTimeoutMs=SOCKET_IDLE_TIMEOUT_MS,d
   });
   let last=Date.now()/1000;const tick=setInterval(()=>{
     const start=performance.now();
-    const now=Date.now()/1000;game.update(now-last,now);last=now;
+    const now=Date.now()/1000,delta=Math.max(0,now-last);
+    if(delta>.2)metrics.tickOverruns++;
+    game.update(Math.min(delta,.1),now);last=now;
     const elapsed=performance.now()-start;
     metrics.ticks++;
     metrics.tickAvgMs+=.1*(elapsed-metrics.tickAvgMs);
@@ -1038,7 +1062,14 @@ function startServer({port=PORT,host=HOST,idleTimeoutMs=SOCKET_IDLE_TIMEOUT_MS,d
   },150);
   const persistence=setInterval(saveAll,10000);
   server.listen(port,host,()=>console.log(`\n VORNIXO Alpha ${VERSION} запущен: http://localhost:${server.address().port}\n Игроки в одной сети: http://<IP_компьютера>:${server.address().port}\n Остановить: Ctrl+C\n`));
-  return {server,game,metrics,close:()=>{clearInterval(tick);clearInterval(broadcast);clearInterval(persistence);saveAll();for(const peer of peers)peer.close();server.close();}};
+  return {server,game,metrics,close:()=>{
+    if(closing)return;closing=true;
+    clearInterval(tick);clearInterval(broadcast);clearInterval(persistence);
+    if(disconnectSaveTimer){clearTimeout(disconnectSaveTimer);disconnectSaveTimer=null;}
+    saveAll();
+    for(const peer of peers)peer.close();
+    server.close();
+  }};
 }
 if(require.main===module){
   const app=startServer();let stopping=false;
