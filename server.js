@@ -26,9 +26,10 @@ function readyForState(peer,nowMs,metrics){
 const MAX_MESSAGES_PER_SEC = 50, MESSAGE_BURST = 100;
 const LOGIN_TIMEOUT_MS = 30000, MAX_CONNECTIONS_PER_IP = 4;
 const SOCKET_IDLE_TIMEOUT_MS = 25000; // Client sends input ~18 times/s or a ping every 5s.
-const VERSION='0.19.0', PULSE_COOLDOWN=16, PULSE_COST=10, DASH_COOLDOWN=8, DASH_DISTANCE=175;
+const VERSION='0.20.0', PULSE_COOLDOWN=16, PULSE_COST=10, DASH_COOLDOWN=8, DASH_DISTANCE=175;
 const MAX_BASES=5, BASE_RADIUS=610, BASE_SPACING=1260, MAX_BUILDINGS_PER_BASE=65;
 const MAX_WAVE_SPAWNS=36, WAVE_WARNING_SECONDS=10;
+const MAX_WORLD_ENEMIES=160, MAX_BASE_ENEMIES=32;
 const CRAFTS=Object.freeze({
   medkit:{wood:15,stone:10,gold:5,qty:1,label:'Аптечка'},
   repairkit:{wood:25,stone:15,gold:0,qty:1,label:'Ремкомплект'},
@@ -434,9 +435,31 @@ function createGame({records=[],world=null}={}) {
     else if(msg.action==='use')useItem(p,String(msg.item||''),pos);
   }
   function spawnEnemy(target,cycle,boss=false) {
-    if(!target || g.enemies.length>=160)return false;
-    const a=rand()*Math.PI*2,r=620+rand()*155;
-    const x=clamp(target.x+Math.cos(a)*r,32,WORLD.width-32),y=clamp(target.y+Math.sin(a)*r,32,WORLD.height-32);
+    if(!target)return false;
+    // Reserve room for each settlement. Older saves may contain up to 160 enemies
+    // from just one base; reclaim one non-boss overflow enemy only when the world
+    // is otherwise full and another base is waiting to spawn its wave.
+    const counts=new Map();
+    for(const enemy of g.enemies)counts.set(enemy.baseId,(counts.get(enemy.baseId)||0)+1);
+    if((counts.get(target.id)||0)>=MAX_BASE_ENEMIES)return false;
+    // Enemies are owned by one base and must not appear inside a rival base.
+    let x,y,found=false;
+    const others=cores().filter(base=>base.id!==target.id);
+    for(let attempt=0;attempt<24;attempt++){
+      const a=rand()*Math.PI*2,r=620+rand()*155;
+      x=clamp(target.x+Math.cos(a)*r,32,WORLD.width-32);
+      y=clamp(target.y+Math.sin(a)*r,32,WORLD.height-32);
+      if(others.every(base=>distance(base,{x,y})>BASE_RADIUS+35)){found=true;break;}
+    }
+    if(!found)return false;
+    if(g.enemies.length>=MAX_WORLD_ENEMIES){
+      let largest=null,most=MAX_BASE_ENEMIES;
+      for(const [id,count] of counts)if(id!==target.id&&count>most){largest=id;most=count;}
+      if(largest===null)return false;
+      const stale=g.enemies.findIndex(enemy=>enemy.baseId===largest&&enemy.kind!=='boss');
+      if(stale<0)return false;
+      g.enemies.splice(stale,1);
+    }
     const chance=rand(),wave=cycle.wave;
     const kind=boss?'boss':wave>=10&&chance>.97?'berserker':wave>=9&&chance>.955?'shaman':wave>=7&&chance>.92?'sapper':wave>=8&&chance>.85?'raider':wave>=6&&chance<.10?'tank':wave>=3&&chance<.24?'spitter':
       chance<Math.min(.48,.10+wave*.018)?'runner':wave%4===0&&chance>.80?'brute':'normal';

@@ -59,7 +59,7 @@ test('HTTP статус показывает обезличенные показ
   assert.equal(response.status,200);
   assert.equal(response.headers.get('cache-control'),'no-store');
   const status=await response.json();
-  assert.equal(status.version,'0.19.0');
+  assert.equal(status.version,'0.20.0');
   assert.equal(status.players,4);
   assert.ok(status.performance.ticks>=1);
   assert.ok(status.performance.snapshotsSent>=4);
