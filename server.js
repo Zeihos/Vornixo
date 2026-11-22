@@ -4,6 +4,7 @@ const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const {performance} = require('node:perf_hooks');
 
 const PORT = Number(process.env.PORT) || 3000;
 const HOST = process.env.HOST || '0.0.0.0';
@@ -11,10 +12,21 @@ const WORLD = { width: 3200, height: 2400 };
 const GRID = 54;
 const MAX_PLAYERS = 16;
 const MAX_CLIENT_MESSAGE = 8192, MAX_SOCKET_BACKLOG = 1024 * 1024;
+const MAX_STATE_BACKLOG = 256 * 1024, MAX_STATE_STALL_MS = 12000;
+function readyForState(peer,nowMs,metrics){
+  if(peer.closed)return false;
+  if(peer.bufferedBytes<MAX_STATE_BACKLOG){peer.stateBackpressureAt=0;return true;}
+  metrics.skippedBackpressure++;
+  peer.stateBackpressureAt ||= nowMs;
+  if(nowMs-peer.stateBackpressureAt>=MAX_STATE_STALL_MS){
+    metrics.slowDisconnects++;peer.close();
+  }
+  return false;
+}
 const MAX_MESSAGES_PER_SEC = 50, MESSAGE_BURST = 100;
 const LOGIN_TIMEOUT_MS = 30000, MAX_CONNECTIONS_PER_IP = 4;
 const SOCKET_IDLE_TIMEOUT_MS = 25000; // Client sends input ~18 times/s or a ping every 5s.
-const VERSION='0.16.0', PULSE_COOLDOWN=16, PULSE_COST=10, DASH_COOLDOWN=8, DASH_DISTANCE=175;
+const VERSION='0.17.0', PULSE_COOLDOWN=16, PULSE_COST=10, DASH_COOLDOWN=8, DASH_DISTANCE=175;
 const MAX_BASES=5, BASE_RADIUS=610, BASE_SPACING=1260, MAX_BUILDINGS_PER_BASE=65;
 const MAX_WAVE_SPAWNS=36, WAVE_WARNING_SECONDS=10;
 const CRAFTS=Object.freeze({
@@ -631,7 +643,7 @@ function createGame({records=[],world=null}={}) {
 }
 
 function makeSocket(socket,onMessage,onClose,{idleTimeoutMs=SOCKET_IDLE_TIMEOUT_MS}={}){
-  let buffer=Buffer.alloc(0),closed=false,rateTokens=MESSAGE_BURST,lastRate=Date.now();
+  let buffer=Buffer.alloc(0),closed=false,rateTokens=MESSAGE_BURST,lastRate=Date.now(),bytesSent=0;
   let lastInboundAt=Date.now();
   // Socket.setTimeout counts outgoing writes as activity on some Node versions,
   // so periodic state broadcasts could keep a dead client alive indefinitely.
@@ -648,10 +660,19 @@ function makeSocket(socket,onMessage,onClose,{idleTimeoutMs=SOCKET_IDLE_TIMEOUT_
     else{header=Buffer.alloc(10);header[0]=0x80|op;header[1]=127;header.writeBigUInt64BE(BigInt(len),2);}
     try{socket.write(Buffer.concat([header,body]));return true;}catch{abort();return false;}
   }
-  const client={get closed(){return closed;},close(){if(!closed){socket.end();abort();}},sendJSON(data){
-    if(closed)return false;
-    return sendFrame(1,Buffer.from(JSON.stringify(data)));
-  }};
+  const client={
+    get closed(){return closed;},
+    get bufferedBytes(){return socket.writableLength;},
+    get bytesSent(){return bytesSent;},
+    close(){if(!closed){socket.end();abort();}},
+    sendJSON(data){
+      if(closed)return false;
+      const payload=Buffer.from(JSON.stringify(data));
+      const sent=sendFrame(1,payload);
+      if(sent)bytesSent+=payload.length;
+      return sent;
+    }
+  };
   socket.setNoDelay(true);
   socket.setKeepAlive(true,30000);
   // Only inbound traffic extends the deadline, regardless of outgoing state updates.
@@ -818,7 +839,11 @@ function startServer({port=PORT,host=HOST,idleTimeoutMs=SOCKET_IDLE_TIMEOUT_MS,d
     game.updateRecords();
     try{atomicWrite(dataFile,game.g.records);}
     catch(e){console.warn('Не удалось сохранить рекорды:',e.message);}
-  }const peers=new Set();const publicDir=path.join(__dirname,'public');
+  }
+  const metrics={startedAt:Date.now(),ticks:0,tickAvgMs:0,tickPeakMs:0,
+    broadcasts:0,broadcastAvgMs:0,snapshotsSent:0,stateBytes:0,
+    skippedBackpressure:0,slowDisconnects:0};
+  const peers=new Set();const publicDir=path.join(__dirname,'public');
   const mime={'.html':'text/html; charset=utf-8','.css':'text/css; charset=utf-8','.js':'application/javascript; charset=utf-8','.svg':'image/svg+xml','.png':'image/png'};
   const server=http.createServer((req,res)=>{
     res.setHeader('X-Content-Type-Options','nosniff');
@@ -829,7 +854,24 @@ function startServer({port=PORT,host=HOST,idleTimeoutMs=SOCKET_IDLE_TIMEOUT_MS,d
     if(!req.url||req.url.length>2048){res.writeHead(414);res.end('URL too long');return;}
     let pathname;try{pathname=decodeURIComponent(new URL(req.url,'http://localhost').pathname);}catch{res.writeHead(400);res.end('Bad URL');return;}
     if(pathname.startsWith('/.')||pathname.split('/').some(part=>part.startsWith('.'))){res.writeHead(403);res.end('Forbidden');return;}
-    if(pathname==='/api/status'){res.setHeader('Content-Type','application/json; charset=utf-8');res.setHeader('Cache-Control','no-store');res.end(JSON.stringify({name:'VORNIXO',version:VERSION,players:game.g.players.size,maxPlayers:MAX_PLAYERS,wave:game.g.wave,phase:game.g.phase,bases:game.g.buildings.filter(b=>b.type==='core').length,maxBases:MAX_BASES,baseWaves:[...game.g.cycles].map(([id,c])=>({id,wave:c.wave,phase:c.phase}))}));return;}
+    if(pathname==='/api/status'){
+      res.setHeader('Content-Type','application/json; charset=utf-8');
+      res.setHeader('Cache-Control','no-store');
+      const load={
+        uptimeSeconds:Math.floor((Date.now()-metrics.startedAt)/1000),
+        ticks:metrics.ticks,tickAvgMs:+metrics.tickAvgMs.toFixed(2),
+        tickPeakMs:+metrics.tickPeakMs.toFixed(2),
+        broadcasts:metrics.broadcasts,
+        broadcastAvgMs:+metrics.broadcastAvgMs.toFixed(2),
+        snapshotsSent:metrics.snapshotsSent,stateBytes:metrics.stateBytes,
+        skippedBackpressure:metrics.skippedBackpressure,slowDisconnects:metrics.slowDisconnects
+      };
+      res.end(JSON.stringify({name:'VORNIXO',version:VERSION,players:game.g.players.size,
+        maxPlayers:MAX_PLAYERS,wave:game.g.wave,phase:game.g.phase,
+        bases:game.g.buildings.filter(b=>b.type==='core').length,maxBases:MAX_BASES,
+        baseWaves:[...game.g.cycles].map(([id,c])=>({id,wave:c.wave,phase:c.phase})),
+        performance:load}));return;
+    }
     const file=path.resolve(publicDir,'.'+(pathname==='/'?'/index.html':pathname));
     if(!(file===path.join(publicDir,'index.html')||file.startsWith(publicDir+path.sep))) {res.writeHead(403);res.end('Forbidden');return;}
     fs.readFile(file,(err,data)=>{
@@ -966,22 +1008,37 @@ function startServer({port=PORT,host=HOST,idleTimeoutMs=SOCKET_IDLE_TIMEOUT_MS,d
     loginTimer.unref();
   });
   let last=Date.now()/1000;const tick=setInterval(()=>{
+    const start=performance.now();
     const now=Date.now()/1000;game.update(now-last,now);last=now;
+    const elapsed=performance.now()-start;
+    metrics.ticks++;
+    metrics.tickAvgMs+=.1*(elapsed-metrics.tickAvgMs);
+    if(elapsed>metrics.tickPeakMs)metrics.tickPeakMs=elapsed;
   },50);
   const broadcast=setInterval(()=>{
     if(!peers.size)return;
-    const now=Date.now()/1000;
+    const start=performance.now(),now=Date.now()/1000,nowMs=Date.now();
     for(const p of game.g.players.values())if(p.socket&&!p.socket.closed){
-      // Resource nodes rarely change; send the initial list and updates only when their revision changes.
+      // A slow peer must not accumulate endlessly queued snapshots.
+      if(!readyForState(p.socket,nowMs,metrics))continue;
+      // Resource nodes rarely change; resend on first successful state and revisions.
       const revision=game.g.resourceRevision;
       const includeResources=p._sentResourceRevision!==revision;
+      const oldBytes=p.socket.bytesSent;
       const sent=p.socket.sendJSON({...game.snapshot(now,p,{includeResources}),myTeam:teamInfo(p)});
-      if(sent&&includeResources)p._sentResourceRevision=revision;
+      if(sent){
+        metrics.snapshotsSent++;
+        metrics.stateBytes+=p.socket.bytesSent-oldBytes;
+        if(includeResources)p._sentResourceRevision=revision;
+      }
     }
+    const elapsed=performance.now()-start;
+    metrics.broadcasts++;
+    metrics.broadcastAvgMs+=.1*(elapsed-metrics.broadcastAvgMs);
   },150);
   const persistence=setInterval(saveAll,10000);
   server.listen(port,host,()=>console.log(`\n VORNIXO Alpha ${VERSION} запущен: http://localhost:${server.address().port}\n Игроки в одной сети: http://<IP_компьютера>:${server.address().port}\n Остановить: Ctrl+C\n`));
-  return {server,game,close:()=>{clearInterval(tick);clearInterval(broadcast);clearInterval(persistence);saveAll();for(const peer of peers)peer.close();server.close();}};
+  return {server,game,metrics,close:()=>{clearInterval(tick);clearInterval(broadcast);clearInterval(persistence);saveAll();for(const peer of peers)peer.close();server.close();}};
 }
 if(require.main===module){
   const app=startServer();let stopping=false;
@@ -993,4 +1050,4 @@ if(require.main===module){
   };
   process.once('SIGINT',shutdown);process.once('SIGTERM',shutdown);
 }
-module.exports={createGame,startServer,RECIPES,CRAFTS,SKILLS,TECHNOLOGIES,ACHIEVEMENTS,techCost,biomeAt,skillCost,WORLD,PULSE_COOLDOWN,PULSE_COST,DASH_COOLDOWN,DASH_DISTANCE,MAX_BASES,BASE_RADIUS,BASE_SPACING};
+module.exports={createGame,startServer,readyForState,RECIPES,CRAFTS,SKILLS,TECHNOLOGIES,ACHIEVEMENTS,techCost,biomeAt,skillCost,WORLD,PULSE_COOLDOWN,PULSE_COST,DASH_COOLDOWN,DASH_DISTANCE,MAX_BASES,BASE_RADIUS,BASE_SPACING};

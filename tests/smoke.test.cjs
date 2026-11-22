@@ -30,12 +30,12 @@ test('game state can be created and exported without external packages',()=>{
   assert.ok(game.snapshot(Date.now()/1000).players.some(x=>x.id===p.id));
 });
 
-test('HTTP serves the actual game and reports Alpha 0.16.0',async t=>{
+test('HTTP serves the actual game and reports Alpha 0.17.0',async t=>{
   const base=await launch(t);
   const status=await fetch(base+'/api/status');
   assert.equal(status.status,200);
   const info=await status.json();
-  assert.equal(info.version,'0.16.0');
+  assert.equal(info.version,'0.17.0');
   assert.equal(info.players,0);
   for(const asset of ['/','/game.js','/style.css']){
     const result=await fetch(base+asset);
